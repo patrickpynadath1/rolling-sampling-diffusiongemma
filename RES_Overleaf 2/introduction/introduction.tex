@@ -1,0 +1,38 @@
+Autoregressive language models train on all tokens in parallel, yet must generate them one at a time.
+Diffusion language models remove this limit by denoising many tokens in each forward pass \citep{nie2026large, ye2025dream7bdiffusionlarge, team2026diffusiongemma}.
+
+How well this works depends on the sampler.
+In the continuous domain, many improvements have been driven by improved sampling algorithms \citep{song2020denoising}.
+The same is true for the language domain, where sampling order has been shown to have a dramatic effect on task performance \citep{kim2025train, ben2026accelerated, kim2026klass}.
+
+Any diffusion language sampler makes two choices for each position in its denoising window.
+The first is \emph{where} the next token comes from: the model's prediction, the token already at that position, or fresh noise.
+The second is \emph{when} the position is committed to the KV cache, after which it can no longer change.
+Existing samplers tie the two choices together.
+Samplers for masked diffusion freeze a token the moment it is accepted \citep{nie2026large, ben2026accelerated}, so acceptance and commitment are the same event.
+Block samplers sit at the other extreme: every token waits until the whole block has converged \citep{arriola2025blockdiffusioninterpolatingautoregressive, team2026diffusiongemma}.
+
+We separate the two choices and study each extreme on DiffusionGemma \citep{team2026diffusiongemma}, a uniform diffusion model whose default sampler is the entropy-bound (EB) sampler of \citet{ben2026accelerated}.
+Both extremes are costly.
+\emph{Committing too early} removes self-correction: when accepted tokens are frozen, macro accuracy falls from 73\% to 20\% as the entropy bound is relaxed, while the unfrozen sampler stays near 70\%.
+This self-correction is a property of the model rather than the sampler, as it persists when renoising is removed.
+\emph{Committing too late} wastes compute: tokens converge in a largely left-to-right order, so a converged prefix sits idle in the window, and after ten denoising steps more than half of the slots are spent on tokens that are already final.
+
+These two findings motivate the Rolling Entropy Sampler (RES).
+RES uses the entropy bound for both choices: it accepts tokens as the EB sampler does, and it commits the accepted prefix of the window as soon as that prefix is at least $s$ tokens long.
+Every position outside the committed prefix stays free to change.
+The minimum shift $s$ sets how long a token stays in the window, and gives a second knob, beside the entropy bound, for moving along the speed-quality frontier.
+
+In summary, our contributions are as follows:
+\begin{itemize}
+    \item We write samplers as a routing rule and a commitment rule (Section~\ref{sec:motivation}), which separates accepting a token from committing it.
+    \item We show that DiffusionGemma self-corrects without renoising, and that freezing accepted tokens destroys its speed-quality frontier (Section~\ref{sec:too-early}).
+    \item We show that the EB sampler converges left to right, leaving over half of the window idle late in each block (Section~\ref{sec:too-late}).
+    \item We introduce RES (Section~\ref{sec:method}). Across seven benchmarks it raises tokens per forward pass by 32\% at an average cost of 1.9 points of accuracy, and it extends the frontier beyond what relaxing the entropy bound alone reaches (Section~\ref{sec:experiments}).
+\end{itemize}
+
+
+
+
+
+

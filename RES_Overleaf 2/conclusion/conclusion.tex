@@ -1,0 +1,6 @@
+We separated two choices that diffusion language samplers usually tie together: where each position's next token comes from, and when the position is committed to the KV cache.
+On DiffusionGemma, both extremes of the second choice are costly.
+Treating acceptance as commitment removes the model's ability to correct itself, which it does without renoising; delaying commitment until the block converges spends over half of the late denoising slots on tokens that are already final.
+RES commits the accepted prefix once it is long enough and leaves the rest of the window free to change, which raises tokens per forward pass by 32\% at an average cost of 1.9 points of accuracy and extends the speed-quality frontier at high throughput.
+The cost is not uniform: instruction following degrades more than the other tasks, and at low throughput the block sampler remains the better choice.
+We hope that the separation of acceptance from commitment serves as a useful baseline for future diffusion samplers.

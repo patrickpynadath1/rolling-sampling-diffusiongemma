@@ -1,0 +1,16 @@
+Here we discuss works that are closely related to the framework and sampler modifications proposed in this work.
+
+\subsection{Adaptive Block Samplers}
+Our work is not the first to suggest incrementally moving the denoising window: \citet{luo2026dsb} applies this to masked diffusion and sees performance gains. \citet{gat2025set, arriola2025blockdiffusioninterpolatingautoregressive}.
+\citet{gat2025set} fine-tunes an auto-regressive model to simultaneously decode the masked tokens ahead using the \citet{ben2026accelerated} while generating the next token auto-regressively, which is the same core idea of a rolling denoising window.
+Furthermore, the denoising window is entirely defined by the entropy bound, which has been already defined in \citet{ben2026accelerated} and used in the original sampler of \citet{team2026diffusiongemma}.
+
+Similar ideas of combining diffusion with the left-to-right bias of language have appeared even earlier, such as in \citep{wu2023ar}.
+The purpose of this work isn't to introduce a novel concept, but to show how various aspects of discrete diffusion samplers can be synthesized into one simple framework to enable further flexibility in terms of the tradeoff between performance and speed.
+
+\subsection{Rolling Diffusion Beyond Text}
+Beyond text generation, the idea of rolling diffusion has been studied extensively in other domains.
+Within video generation, rolling diffusion was a natural mechanism to address the temporal nature of video generation and avoid performing diffusion on every frame simultaneously \citep{ruhe2024rolling}. 
+Many other works include similar mechanisms \citep{chen2024diffusion, song2025history, xie2025progressive}.
+
+Similarly, \citet{papa2026asyncpatch} applies a similar idea to the image domain, where different patches are assigned varying levels of corruption.

@@ -1,0 +1,41 @@
+In this section, we write existing samplers in terms of a routing rule and a commitment rule (Algorithm~\ref{alg:gen-adapt}, Table~\ref{tab:samplers}).
+We assume a diffusion model that learns the posterior $P(X_0 | X_t)$, and takes both a denoising window and a KV cache as input.
+The denoising window represents tokens that are actively being denoised, and the KV cache corresponds to tokens that have been completely denoised.
+
+At every time-step, the sampler must answer the following two questions:
+\begin{enumerate}
+    \item \textit{Where does the token come from?} Is it the predicted token $\hat{X}_i \sim P_{\theta}(\cdot | X_t)_i$, the previous value $X_t^i$, or a fresh noisy token drawn from $\pi$?
+    \item \textit{When does the position get appended to the KV cache?} Do we move the position to the KV cache, or keep it in the denoising window?
+\end{enumerate}
+
+To answer the first question, a sampler defines a routing rule $F_{route}$ that specifies a point $(p_{accept},\allowbreak p_{stay},\allowbreak p_{noise})$, which we refer to as the accept-stay-noise simplex.
+A position is \emph{accepted} when the routing rule takes the model's prediction for the current step.
+
+The second question is answered by a commitment rule $F_{commit}$ that moves positions from the denoising window to the KV cache, after which their tokens can no longer change.
+Tying commitment to each position's acceptance entangles these choices; a block or prefix rule instead waits for a set of positions to be accepted.
+The subscripts in $p_{accept}$ and $F_{commit}$ denote acceptance and cache commitment, respectively.
+
+\input{motivation/generic_algo}
+\input{motivation/adaptive_table}
+
+\paragraph{The Accept-Stay-Noise Simplex}
+The reverse bridge in equation~\ref{eq:true-rev-coords} gives the probabilities of these three routing choices, with $\pi$ as the prior distribution of the process.
+We borrow this routing view from RDM \citep{zheng2023reparameterized}, which introduces auxiliary routing variables and makes the available moves depend on whether the current token is already clean: a clean token either stays or is renoised, and a noisy token is either denoised or renoised.
+We introduce no auxiliary variables and place all three moves on a single simplex: the expectation of the clean-token indicator is the posterior's mass on the current token, and the bridge already exposes the three moves without it.
+
+Furthermore, this aligns with the design principles behind the HackableDiffusion codebase, which is an open-source framework for diffusion models \citep{hackable_diffusion2026github}.
+
+\paragraph{Adaptive Samplers as Routing Rules}
+The routing view was introduced to make this choice explicit: \citet{zheng2023reparameterized} observe that the standard sampler routes every token with the same probability, and that writing the router out allows more flexible decoding rules.
+Adaptive-order samplers fit this view directly, as each one specifies the accept-stay-noise point for every position at every step (Table~\ref{tab:samplers}).
+A related split appears in \citet{liu2025think}, which separates planning (choosing which positions to change) from denoising (predicting the clean token).
+Our addition is the second axis: prior routing views describe where each token comes from, but not when a position is committed to the KV cache.
+The shared notation allows acceptance rules to be compared across corruption processes, while keeping their different noise distributions and constraints on future revisions explicit.
+
+\paragraph{Baseline: Unified EB}
+The default DiffusionGemma sampler accepts tokens with the entropy bound but commits a block with a separate stopping rule (Table~\ref{tab:samplers}).
+We replace that rule with the entropy bound itself: the block is committed once every position in the window is accepted in a single step.
+This leaves one hyper-parameter, $\gamma$, in control of both choices.
+Figure~\ref{fig:unified-vs-orig} shows that the unified rule matches the original rule at the default bound and keeps gaining throughput as $\gamma$ is relaxed, where the original rule stalls.
+We use Unified EB as the baseline for the rest of the paper.
+\input{motivation/self_correction}

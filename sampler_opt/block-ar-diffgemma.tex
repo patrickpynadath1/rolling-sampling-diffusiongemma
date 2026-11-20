@@ -1,0 +1,14 @@
+\begin{algorithm}
+\caption{DiffusionGemma Block Autoregressive}
+\label{alg:block-ar}
+\begin{algorithmic}[1] % The [1] enables line numbers. Remove it for no numbers.
+    \REQUIRE Prompt $X_{prompt}$, maximum sequence length $l_{max}$, block size $d$, denoiser $D_{\theta}$, encoder $E_{\theta}$, stop condition $f_{stop}$
+    \STATE KV $\gets \text{Prefill}(X, l_{\max}, E_{\theta})$, $X_{cur} \gets X_{prompt}$
+    \WHILE{not $f_{stop}(X_{cur})$}
+        \STATE $X_{block} \gets $ EBBlockDenoise($D_{\theta}, X_{cur}, KV)$
+        \STATE $X_{cur} \gets \text{concat}(X_{cur}, X_{block})$
+        \STATE $\text{KV} \gets E_{\theta}(X_{cur}, KV)$
+    \ENDWHILE
+    \RETURN $X_{cur}$
+\end{algorithmic}
+\end{algorithm}

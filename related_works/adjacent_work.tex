@@ -1,0 +1,28 @@
+This paper has three parts: a study of when a sampler should commit tokens, evidence that revising accepted tokens matters in uniform diffusion, and a rolling sampler that needs no training. Each part has close prior or concurrent work.
+
+\subsection{Rolling Windows for Language}
+Several methods move the denoising window forward as tokens finish.
+DSB \citep{luo2026dsb} does this for masked diffusion.
+Set Block Decoding \citep{gat2025set} fine-tunes an autoregressive model to decode masked tokens ahead with the entropy bound of \citet{ben2026accelerated}.
+Concurrent with our work, Clock Diffusion \citep{schiff2026clock} trains a Gaussian diffusion model whose window rolls left to right and commits finished positions to the KV cache.
+Its noise schedule depends on position, and our position-based temperature schedule plays the same role at inference time.
+\citet{wu2023ar} paired diffusion with the left-to-right bias of language earlier still.
+RES uses the same rolling mechanism, and we do not claim the mechanism as new.
+
+\subsection{Freezing versus Revising}
+In masked diffusion, an unmasked token stays fixed.
+A rolling masked sampler such as DSB therefore never revises a token once it accepts it.
+\citet{kim2025fine} fine-tune masked diffusion models so that they can revise tokens they have already revealed.
+
+\subsection{What This Paper Adds}
+Freezing accepted tokens in DiffusionGemma lowers macro accuracy from 73\% to 20\% at loose entropy bounds (Section~\ref{sec:too-early}).
+A rolling sampler must therefore balance two goals: moving tokens into the KV cache early, and keeping them open to revision.
+From the order in which tokens are accepted (Section~\ref{sec:too-late}), we design a commit rule with two properties.
+Its minimum shift moves the sampler between block-level commitment and fully incremental commitment, which commits whenever it can.
+Its entropy bound still trades accuracy for speed, as in the baseline.
+Unlike Clock Diffusion, RES needs no training and runs on an existing model.
+
+\subsection{Rolling Diffusion Beyond Text}
+Beyond text generation, the idea of rolling diffusion has been studied extensively in other domains.
+Within video generation, rolling diffusion was a natural mechanism to address the temporal nature of video generation and avoid performing diffusion on every frame simultaneously \citep{ruhe2024rolling}.
+Many other works include similar mechanisms \citep{chen2024diffusion, song2025history, xie2025progressive}, and \citet{papa2026asyncpatch} carry the idea over to images by assigning different patches different levels of corruption.

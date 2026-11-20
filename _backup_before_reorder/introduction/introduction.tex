@@ -1,0 +1,38 @@
+Autoregressive training can process tokens in parallel; yet must generate sequentially.
+Thus many have looked towards parallel decoding, in particular diffusion, as a means of generating tokens in parallel.
+
+One particularly exciting area for research is diffusion language model samplers.
+In the continuous domain, many improvements have been driven by improved sampling algorithms \citep{song2020denoising}. 
+The same is true for the language domain, where sampling order has been shown to have a dramatic effect on task performance \citep{kim2025train, ben2026accelerated, kim2026klass}.
+
+In this work, we propose a generic recipe for samplers driven by the fundamental components a diffusion language model must have and what questions a sampler must answer. More specifically, any diffusion language sampler must answer (1): where do the tokens at each position come from; and (2) where do the positions within the denoising window go, between the active denoising block and the KV cache.
+The first question must be answered with a routing rule that picks between the model's predicted token, the original token at that position, and a fresh noisy token.
+The second question must be determined by some mechanism that commits accepted tokens from the denoising window to the KV cache.
+By specifying these questions, it is possible to obtain a wider range of samplers.
+
+Given this generic recipe, we take DiffusionGemma as a representative example of uniform denoisers, and study whether we can improve the performance of the already throughput-optimized sampler further. 
+First, we find that by altering the commitment rule, we can gain a few extra tokens per forward with almost neglible performance drop.
+Furthermore, by linking the commitment rule to the token acceptance rule, we can achieve a wide range of desirable points on the Pareto frontier between performance and speed.
+Next, we discover that DiffusionGemma has self-correcting property that does not rely on an externally defined noising schedule, which highlights a key advantage of uniform diffusion models.
+This is what makes DiffusionGemma particularly robust to relaxed thresholds for the EB sampler.
+Finally, we observe that the base sampler for DiffusionGemma exhibits an autoregressive acceptance bias, suggesting a simple rolling optimization to the commitment rule that provides another lever for trading off speed and performance.
+
+% Frontier diffusion language models decode block-autoregressively: the model iteratively denoises a fixed canvas of tokens, and only once the entire canvas has converged is it committed and the next canvas begun \citep{arriola2025blockdiffusioninterpolatingautoregressive, team2026diffusiongemma, song2025seed, nie2026large, ye2025dream7bdiffusionlarge}. 
+% Within a canvas, adaptive samplers such as the Entropy-Bounded (EB) sampler decide how many tokens to resolve per denoising step, concentrating work where the model is uncertain \citep{ben2026accelerated}. 
+% The block structure, however, imposes a cost that no within-canvas sampler can avoid: every denoising step is a full-width forward pass, regardless of how little unresolved work the canvas still contains. 
+% As a canvas nears convergence, the sampler processes the entire sequence, regardless of whether most of the positions are already resolved. 
+% This property of block denoising represents a major inefficiency, as the compute expended on denoised positions could be redirected towards resolving noisy tokens in the next canvas. 
+
+% Two observations suggest that this inefficiency can be addressed. First, the EB sampler commits tokens in a loosely autoregressive order: across [benchmarks], the order in which positions realize their final token, or when they are committed, tend to correlate with an autoregressive ordering. 
+% Second, while uniform diffusion models can theoretically change the token identity even after being accepted during the EB sampler, we find that this tends to occur with very low probability. 
+
+% These two observations motivate \algname. 
+% Rather than viewing the denoising window as moving across the sequence, we view the sequence as flowing through a fixed denoising window.
+% This behavior is governed by two rules: the standard acceptance rule introduced by the EB sampler, and a commitment rule: when the accepted positions include a contiguous prefix of the window, the window appends them to the KV cache and moves past them. The freed positions are refilled with fresh noise at the trailing edge of the window, so subsequent passes denoise unresolved tokens. 
+% The fixed window also lets us recast the usual time-dependent temperature schedule as a static per-position profile: each window slot carries a fixed temperature, highest at the intake and lowest at the exit, so a token flowing through the window anneals from exploratory sampling to sharp predictions by construction, with no per-step schedule logic.
+
+% Throughout this paper, we use DiffusionGemma~\citep{team2026diffusiongemma} as our primary model, though \algname applies to block diffusion language models generally. We begin with three empirical observations that motivate the design (Section~\ref{sec:motivation}). First, DiffusionGemma commits tokens in a strongly autoregressive order, consistent with observations across other diffusion LMs \citep{ni2026flexibility}. Second, tokens accepted by the entropy rule are rarely renoised in later steps: the model retains high confidence in them once accepted. Together, these imply that block decoding wastes computation in a predictable way: as a block nears convergence, each full-width forward pass re-processes a stable accepted prefix in order to resolve a few remaining positions, work that could instead resolve tokens of the next block. We quantify this waste directly.
+
+% We then introduce \algname (Section~\ref{sec:method}): the two rules governing the sampler, the recasting of the temporal temperature schedule as a fixed spatial profile over the window, and the resulting steady-state behavior of the window's entropy. We further show that \algname admits an interpretation as approximate speculative decoding, in which the parallel acceptances of each step act as a draft against a sequential target, the autoregressive-order decomposition of the diffusion model itself, and the entropy budget bounds the probability that an exact verifier would reject the draft (Section~\ref{subsec:specdec}).
+
+% Finally, we evaluate \algname against the EB sampler on a wide range of benchmarks (Section~\ref{sec:experiments}), demonstrating consistently higher tokens per forward pass at matched quality, with only marginal degradation in the worst case.

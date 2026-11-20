@@ -1,0 +1,30 @@
+\subsection{Main Results}
+Here we compare the performance of the rolling sampler against the Unified EB sampler. We compare across a wide range of evaluations, and take the average performance across 20 seeds. 
+We show the results in Table \ref{tab:eb_unified_vs_rolling} along with the Pass at K in Figure \ref{fig:macro_pass_at_k}.
+
+\paragraph{Performance and Efficiency}
+We observe that the rolling sampler is able to \textbf{improve algorithmic efficiency by over $30\%$} while incurring only $<3\%$ performance degradation.
+We view such performance degradation as inevitable due to the exposure bias incurred when using the rolling sampler: the rolling sampler induces a noise schedule that is heavily left-to-right, which is distinct from the homogeneous noise schedule used within the block at training time.
+
+\paragraph{Pass @ k}
+We also observe that the rolling sampler exhibits larger gains with pass at k relative to the original EB sampler.
+We hypothesize that the EB sampler avoids making "difficult" decisions as the sampler always accepts the lowest entropy positions first.
+In contrast, the rolling mechanism along with the position-based noise schedule enforces a left-to-right generation bias, which was shown in \citet{ni2026flexibility} to improve diversity across generations. 
+
+
+
+\subsection{Ablations}
+Here we include ablation results, using the macro-average across LCB v6, GPQA Diamond, and Natural2Code.
+
+\input{experiments/results_layout}
+
+\paragraph{Entropy-Bound Sweep}
+We sweep the entropy bound for the rolling sampler with minimum shift 32 and the unified EB sampler across LCB v6, GPQA Diamond, and Natural2Code.
+We include the frontiers in Figure \ref{fig:minshift-16}.
+We observe that the rolling sampler achieves a competitive frontier with the unified EB sampler, and in some cases achieves a superior frontier in terms of performance v.s efficiency. 
+
+\paragraph{Minimum Shift Sweep}
+While the unified entropy bound sampler provides one axis to trade off performance and speed, we find that the rolling sampler allows for using the minimum shift hyper-parameter in addition to the standard entropy-bound. 
+In Figure \ref{fig:dual-frontier}, we observe that the rolling sampler can trade performance for speed either through the entropy bound or the minimum shift. 
+Increasing the minimum shift improves performance at the expense of speed; similar to the effect of decreasing the entropy bound.
+This makes sense, as the primary purpose of the minimum shift is to force the model to spend more time denoising on the current span of text in the denoising window.

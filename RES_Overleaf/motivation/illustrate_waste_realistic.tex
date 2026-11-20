@@ -1,0 +1,159 @@
+% ---------------------------------------------------------------
+% Block vs rolling sampler: where the denoising slots go.
+%
+% Palette is shared with the concept figure (v12):
+%   white  = already encoded, in the KV cache   (was gray here)
+%   gray   = not yet admitted                   (was white here)
+%   teal   = denoising slot
+%   amber  = accepted on this pass              (was blue here)
+%   brick  = wasted: re-denoised while waiting for its prefix
+% The white/gray swap matters: in the concept figure white always means
+% "settled, never recomputed" and gray always means "not admitted yet".
+%
+% Requires: \usepackage{tikz}
+% ---------------------------------------------------------------
+\begin{figure}[tbp]
+\centering
+\begin{tikzpicture}[x=0.205cm, y=0.205cm]
+
+\definecolor{cwinfill}{HTML}{9FE1CB}
+\definecolor{cwinedge}{HTML}{0F6E56}
+\definecolor{camber}{HTML}{E8A13C}
+\definecolor{camberedge}{HTML}{A96A0B}
+\definecolor{cwaste}{HTML}{C0553C}
+\definecolor{cwasteedge}{HTML}{7A2E1C}
+\definecolor{cnoise}{HTML}{D3D1C7}
+\definecolor{cnoiseedge}{HTML}{888780}
+\definecolor{cclean}{HTML}{FFFFFF}
+\definecolor{ccleanedge}{HTML}{B4B4A9}
+\definecolor{cframe}{HTML}{2B5E94}
+
+% Exact tints from the concept figure: the strip's cells are cwinfill!(30..100)
+% with cwinedge, camber!45 with camberedge, cnoise with cnoiseedge, cclean with
+% ccleanedge; the mask's window block is cwinfill!65.  A uniform denoising slot
+% here therefore takes cwinfill!65.
+% 1 = denoising, 2 = accepted this pass, 3 = accepted but re-denoised,
+% 4 = in KV cache, 5 = not admitted
+\newcommand{\gridcell}[3]{%
+  \ifcase#3\relax
+  \or \fill[cwinfill!65, draw=cwinedge,   line width=0.3pt, rounded corners=0.5pt] (#1, -#2) rectangle ++(0.88, -0.88);
+  \or \fill[camber!45,   draw=camberedge, line width=0.3pt, rounded corners=0.5pt] (#1, -#2) rectangle ++(0.88, -0.88);
+  \or \fill[cwaste,      draw=cwasteedge, line width=0.3pt, rounded corners=0.5pt] (#1, -#2) rectangle ++(0.88, -0.88);
+  \or \fill[cclean,      draw=ccleanedge, line width=0.3pt, rounded corners=0.5pt] (#1, -#2) rectangle ++(0.88, -0.88);
+  \or \fill[cnoise,      draw=cnoiseedge, line width=0.3pt, rounded corners=0.5pt] (#1, -#2) rectangle ++(0.88, -0.88);
+  \fi}
+
+% \gridrow{x shift}{row}{window lo}{window hi}
+%   cols [0, lo)  : already encoded, in the KV cache (white)
+%   cols [lo, hi) : denoised on this pass            (teal)
+%   cols [hi, 24) : not yet admitted                 (gray)
+\newcommand{\gridrow}[4]{%
+  \foreach \c in {0,...,23} {%
+    \pgfmathtruncatemacro{\sty}{\c<#3 ? 4 : (\c<#4 ? 1 : 5)}%
+    \pgfmathsetmacro{\xpos}{\c + #1}%
+    \gridcell{\xpos}{#2}{\sty}%
+  }}
+
+% \gridmarks{x shift}{row}{style}{column list} -- repaint individual cells of a row.
+% Acceptance is out of order, so these sets are not contiguous ranges.
+% (Do not call this \marks: that is an e-TeX primitive.)
+\newcommand{\gridmarks}[4]{%
+  \foreach \c in {#4} {%
+    \pgfmathsetmacro{\xpos}{\c + #1}%
+    \gridcell{\xpos}{#2}{#3}%
+  }}
+
+% ---------- inline legend swatches (same vocabulary as the concept figure) ----------
+\newcommand{\keydenoise}{\begin{tikzpicture}[baseline=-0.5ex, x=0.30cm, y=0.30cm]
+  \fill[cwinfill!65, draw=cwinedge, line width=0.3pt, rounded corners=0.5pt] (0,-0.5) rectangle ++(0.88,1);
+\end{tikzpicture}}
+\newcommand{\keyaccept}{\begin{tikzpicture}[baseline=-0.5ex, x=0.30cm, y=0.30cm]
+  \fill[camber!45, draw=camberedge, line width=0.3pt, rounded corners=0.5pt] (0,-0.5) rectangle ++(0.88,1);
+\end{tikzpicture}}
+\newcommand{\keywaste}{\begin{tikzpicture}[baseline=-0.5ex, x=0.30cm, y=0.30cm]
+  \fill[cwaste, draw=cwasteedge, line width=0.3pt, rounded corners=0.5pt] (0,-0.5) rectangle ++(0.88,1);
+\end{tikzpicture}}
+\newcommand{\keycache}{\begin{tikzpicture}[baseline=-0.5ex, x=0.30cm, y=0.30cm]
+  \fill[cclean, draw=ccleanedge, line width=0.3pt, rounded corners=0.5pt] (0,-0.5) rectangle ++(0.88,1);
+\end{tikzpicture}}
+\newcommand{\keyunadmitted}{\begin{tikzpicture}[baseline=-0.5ex, x=0.30cm, y=0.30cm]
+  \fill[cnoise, draw=cnoiseedge, line width=0.3pt, rounded corners=0.5pt] (0,-0.5) rectangle ++(0.88,1);
+\end{tikzpicture}}
+
+% ===== Panel (a), left: block sampler, three blocks of b = 8, 19 passes =====
+\node[anchor=west, font=\footnotesize\bfseries] at (0, 1.5) {(a) Block sampler, $b=8$: 19 passes};
+
+% Block 1 (cols 0-7): accepts {0,3}, {1,2}, {4,6}, {5,7}
+\gridrow{0}{0}{0}{8}
+\gridrow{0}{1}{0}{8}
+\gridrow{0}{2}{0}{8}                     \gridmarks{0}{2}{2}{0,3}
+\gridrow{0}{3}{0}{8} \gridmarks{0}{3}{3}{0,3}          \gridmarks{0}{3}{2}{1,2}
+\gridrow{0}{4}{0}{8} \gridmarks{0}{4}{3}{0,1,2,3}      \gridmarks{0}{4}{2}{4,6}
+\gridrow{0}{5}{0}{8} \gridmarks{0}{5}{3}{0,1,2,3,4,6}  \gridmarks{0}{5}{2}{5,7}
+% Block 2 (cols 8-15): a slower block, accepts {8,11}, {9}, {10,13}, {12,14}, {15}
+\gridrow{0}{6}{8}{16}
+\gridrow{0}{7}{8}{16}
+\gridrow{0}{8}{8}{16}                        \gridmarks{0}{8}{2}{8,11}
+\gridrow{0}{9}{8}{16}  \gridmarks{0}{9}{3}{8,11}             \gridmarks{0}{9}{2}{9}
+\gridrow{0}{10}{8}{16} \gridmarks{0}{10}{3}{8,9,11}          \gridmarks{0}{10}{2}{10,13}
+\gridrow{0}{11}{8}{16} \gridmarks{0}{11}{3}{8,9,10,11,13}    \gridmarks{0}{11}{2}{12,14}
+\gridrow{0}{12}{8}{16} \gridmarks{0}{12}{3}{8,9,10,11,12,13,14} \gridmarks{0}{12}{2}{15}
+% Block 3 (cols 16-23): accepts {16,19}, {17,18}, {20,22}, {21,23}
+\gridrow{0}{13}{16}{24}
+\gridrow{0}{14}{16}{24}
+\gridrow{0}{15}{16}{24}                          \gridmarks{0}{15}{2}{16,19}
+\gridrow{0}{16}{16}{24} \gridmarks{0}{16}{3}{16,19}              \gridmarks{0}{16}{2}{17,18}
+\gridrow{0}{17}{16}{24} \gridmarks{0}{17}{3}{16,17,18,19}        \gridmarks{0}{17}{2}{20,22}
+\gridrow{0}{18}{16}{24} \gridmarks{0}{18}{3}{16,17,18,19,20,22}  \gridmarks{0}{18}{2}{21,23}
+
+% Block boundaries
+\foreach \x in {7.94, 15.94} {
+  \draw[cframe, dashed, line width=0.4pt] (\x, 0.3) -- (\x, -19.2);
+}
+\node[anchor=east, font=\scriptsize] at (-0.5, -0.44) {$t=1$};
+\node[anchor=east, font=\scriptsize] at (-0.5, -18.44) {$t=19$};
+
+% ===== Panel (b), right: rolling sampler, w = 8, 13 passes =====
+\node[anchor=west, font=\footnotesize\bfseries] at (29.5, 1.5) {(b) Rolling sampler, $w=8$: 13 passes};
+
+\gridrow{29.5}{0}{0}{8}
+\gridrow{29.5}{1}{0}{8}
+\gridrow{29.5}{2}{0}{8}                          \gridmarks{29.5}{2}{2}{0,3}
+\gridrow{29.5}{3}{1}{9}   \gridmarks{29.5}{3}{3}{3}          \gridmarks{29.5}{3}{2}{1,2}
+\gridrow{29.5}{4}{4}{12}                         \gridmarks{29.5}{4}{2}{4,6}
+\gridrow{29.5}{5}{5}{13}  \gridmarks{29.5}{5}{3}{6}          \gridmarks{29.5}{5}{2}{5,7,8}
+\gridrow{29.5}{6}{9}{17}                         \gridmarks{29.5}{6}{2}{9,12}
+\gridrow{29.5}{7}{10}{18} \gridmarks{29.5}{7}{3}{12}         \gridmarks{29.5}{7}{2}{10,11}
+\gridrow{29.5}{8}{13}{21}                        \gridmarks{29.5}{8}{2}{13,14,17}
+% t=10: 16 and 18 are accepted but 15 is not, so the prefix -- and the window -- cannot move
+\gridrow{29.5}{9}{15}{23} \gridmarks{29.5}{9}{3}{17}         \gridmarks{29.5}{9}{2}{16,18}
+% t=11: 15 resolves and five positions flush to the cache at once
+\gridrow{29.5}{10}{15}{23} \gridmarks{29.5}{10}{3}{16,17,18} \gridmarks{29.5}{10}{2}{15,19}
+\gridrow{29.5}{11}{20}{24}                       \gridmarks{29.5}{11}{2}{20,22}
+\gridrow{29.5}{12}{21}{24} \gridmarks{29.5}{12}{3}{22}       \gridmarks{29.5}{12}{2}{21,23}
+
+\node[anchor=east, font=\scriptsize] at (29.0, -0.44) {$t=1$};
+\node[anchor=east, font=\scriptsize] at (29.0, -12.44) {$t=13$};
+
+% ===== Legend: measured by LaTeX and centred on the two grids (x = 0..53.4) =====
+\node[anchor=north, font=\scriptsize, inner sep=0pt] at (26.7, -20.4) {%
+  \begin{tabular}{@{}l@{~}l@{\hspace{1.8em}}l@{~}l@{\hspace{1.8em}}l@{~}l@{}}
+    \keydenoise & denoising slot   & \keyaccept     & accepted on this pass &
+    \keywaste   & wasted: re-denoised while waiting \\[2.5pt]
+    \keycache   & in the KV cache  & \keyunadmitted & not yet admitted      &
+                &                                    \\
+  \end{tabular}};
+
+\end{tikzpicture}
+\caption{\textbf{Where the denoising slots go.} Both samplers denoise a
+width-$8$ window per pass in the same order, and the colours are those of
+Figure~\ref{fig:algorithm-concept}: teal = still denoising, amber = accepted
+on this pass, white = already encoded and in the KV cache, gray = not yet
+admitted.  Brick marks a slot spent re-denoising a position that was already
+accepted but is still waiting for its prefix, that is, wasted work.
+\textbf{(a)} The block sampler appends only once the block is fully resolved,
+so converged positions idle and each block re-pays warm-up.  \textbf{(b)} The
+rolling sampler appends the accepted prefix immediately and admits fresh
+positions in its place, wasting far fewer slots.}
+\label{fig:block-vs-rolling}
+\end{figure}

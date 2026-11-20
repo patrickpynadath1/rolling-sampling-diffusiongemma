@@ -1,0 +1,31 @@
+\begin{wraptable}{r}{0.48\textwidth}
+\vspace{-10pt}
+\centering
+\small
+\caption{Comparison of \textbf{EB Unified} vs.\ \textbf{Rolling} across benchmarks ($\text{EB}=0.1, \text{max\_dns}=48$). Scores report \textbf{Avg@20} (Pass@1 averaged across 20 seeds). Deltas relative to EB Unified are shown underneath.}
+\label{tab:eb_unified_vs_rolling}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+& \multicolumn{2}{c}{\textbf{EB Unified}} & \multicolumn{2}{c}{\textbf{Rolling}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+\textbf{Task} & \textbf{Avg@20} & \textbf{TPF} & \textbf{Avg@20} & \textbf{TPF} \\
+\midrule
+Natural2Code & 97.1\% & 24.7 & \begin{tabular}[t]{@{}c@{}}96.2\% \\ \scriptsize{(-0.9\%)}\end{tabular} & \begin{tabular}[t]{@{}c@{}}\textbf{32.6} \\ \scriptsize{(+32.2\%)}\end{tabular} \\
+\addlinespace[2pt]
+GPQA Diamond & 70.6\% & 16.6 & \begin{tabular}[t]{@{}c@{}}66.2\% \\ \scriptsize{(-4.4\%)}\end{tabular} & \begin{tabular}[t]{@{}c@{}}\textbf{23.7} \\ \scriptsize{(+42.7\%)}\end{tabular} \\
+\addlinespace[2pt]
+HiddenMath   & 73.9\% & 22.1 & \begin{tabular}[t]{@{}c@{}}72.5\% \\ \scriptsize{(-1.4\%)}\end{tabular} & \begin{tabular}[t]{@{}c@{}}\textbf{27.2} \\ \scriptsize{(+23.3\%)}\end{tabular} \\
+\addlinespace[2pt]
+GSM8k        & 92.0\% & 21.6 & \begin{tabular}[t]{@{}c@{}}91.6\% \\ \scriptsize{(-0.5\%)}\end{tabular} & \begin{tabular}[t]{@{}c@{}}\textbf{27.7} \\ \scriptsize{(+28.1\%)}\end{tabular} \\
+\addlinespace[2pt]
+IFEval       & 93.0\% & 16.8 & \begin{tabular}[t]{@{}c@{}}82.2\% \\ \scriptsize{(-10.8\%)}\end{tabular} & \begin{tabular}[t]{@{}c@{}}\textbf{22.6} \\ \scriptsize{(+34.2\%)}\end{tabular} \\
+\addlinespace[2pt]
+MMLU         & --     & --   & --     & --     \\
+\midrule
+\textbf{Macro Average} & \textbf{85.3\%} & 20.4 & \begin{tabular}[t]{@{}c@{}}81.7\% \\ \scriptsize{(-3.6\%)}\end{tabular} & \begin{tabular}[t]{@{}c@{}}\textbf{26.8} \\ \scriptsize{(+31.5\%)}\end{tabular} \\
+\bottomrule
+\end{tabular}%
+}
+\vspace{-10pt}
+\end{wraptable}

@@ -1,0 +1,980 @@
+2026-11-20
+RES: Accelerating Diffusion Language Models
+with Rolling Entropy Sampling
+Patrick Pynadath1,*, Nicolas Perez-Nieves2, Bobak Shahriari2, Jean Tarbouriech2, Ruqi Zhang1 and Ivan Lobov*
+1Purdue University,2Google DeepMind,*Work done while at Google DeepMind.
+A diffusion language sampler makes two choices for every position in its denoising window: where
+the next token comes from, and when the position is committed to the KV cache. These choices give
+rise to two extremes: committing tokens on a per-position basis, or committing them at a block level.
+Using the entropy-bound sampler in DiffusionGemma, we study the tradeoffs between the two. We
+simulate per-position commitment by freezing each token upon acceptance, removing the chance for
+later revision: macro accuracy falls from 73% to 20% as the entropy bound is relaxed, while the unfrozen
+variants stay near 70%. Block-level commitment results in redundant computation, as tokens converge
+in a largely left-to-right order and, on average, more than half of the slots are spent on already-final
+tokens by twenty denoising steps. We introduce the Rolling Entropy Sampler (RES), which waits for
+a sufficiently long contiguous accepted prefix, allowing accepted positions farther ahead to remain
+available for revision without waiting for the entire window. Across seven benchmarks, RES raises tokens
+per forward pass by 32.5% at an average cost of 1.9 points of accuracy, and extends the speed-quality
+frontier beyond what relaxing the entropy bound alone can reach.
+1. Introduction
+Autoregressive language models train on all tokens in parallel, yet must generate them one at a
+time. Diffusion language models remove this limit by denoising many tokens in each forward pass
+(DiffusionGemma Team et al., 2026; Nie et al., 2026; Ye et al., 2025). One promising area for research
+is diffusion language model samplers, as many advances in the continuous domain have been driven
+by improved sampler performance (Song et al., 2020). The same is true for the language domain,
+where sampling order has been shown to have a dramatic effect on task performance (Ben-Hamu
+et al., 2026; Kim et al., 2025b, 2026a).
+Any diffusion language sampler makes two choices for each position in its denoising window. The
+first iswherethe next token comes from: the model’s prediction, the token already at that position, or
+fresh noise. This defines when a position within a denoising window has converged. The second is
+whenthe position is committed to the KV cache, after which it can no longer change. These design
+choices give rise to two potential extremes: on one end, it is possible to commit tokens on aper
+positionbasis, or as soon as a position has converged. It is also possible to commit tokensat a block
+level, or after the entire denoising window has converged.
+In this work, we use the Entropy Bound sampler used in DiffusionGemma (DiffusionGemma Team
+et al., 2026) to study these extremes and uncover the underlying tradeoffs. Committing tokens on a
+per position level removes the chance for later revision, which is particularly useful when trading off
+performance for speed at higher entropy bounds. When accepted tokens are frozen, macro accuracy
+falls from 73% to 20% as the entropy bound is relaxed, while the unfrozen sampler stays near 70%.
+Committing on a block level results in many redundant computations, as tokens converge in a largely
+left-to-right order. Thus a converged prefix sits idle in the window, and by twenty denoising steps
+more than half of the slots, on average, are spent on tokens that are already final.
+As either extreme results in losing sampler flexibility or tolerating wasted computation, we
+©2026 Google. All rights reserved
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+introduce theRollingEntropySampler (RES) to strike the balance between the two. Rather than
+committing tokens as soon as they have converged or waiting for the entire window, the sampler waits
+until a contiguous prefix of positions of length at least𝑠 has converged. Beyond avoiding redundant
+computations on converged tokens, this still allows for a smooth tradeoff between performance and
+speed via the EB threshold.
+In summary, our contributions are as follows:
+• We write samplers as a routing rule and a commitment rule (Section 3), which separates
+accepting a token from committing it.
+• We show that DiffusionGemma self-corrects without renoising, and that freezing accepted
+tokens destroys its speed-quality frontier (Section 4).
+• We show that the EB sampler converges left to right, leaving over half of the window idle late in
+each block (Section 5).
+• We introduce RES (Section 6). Across seven benchmarks it raises tokens per forward pass by
+32.5% at an average cost of 1.9 points of accuracy, and it extends the frontier beyond what
+relaxing the entropy bound alone reaches (Section 7).
+2. Preliminaries
+We study uniform diffusion with a denoising window and KV caching. We review its corruption
+process and entropy-bound acceptance, and include masked diffusion as background for comparing
+sampler rules.
+2.1. Discrete Diffusion
+Here we cover the relevant background for discrete diffusion. When referring to a sequence, we will
+use upper-case𝑋 whereas individual tokens will be represented by𝑥, written as one-hot vectors over
+a vocabulary of size𝐾. We write𝑥0 for a clean token and𝑥𝑡 for its noisy version at time𝑡∈[ 0, 1], and
+we take𝑠 < 𝑡, so that𝑥𝑠 is a less noisy version of𝑥𝑡. The keep rate𝛼𝑡∈[ 0, 1] decreases from𝛼0 = 1to
+𝛼1 = 0, and𝛼𝑡|𝑠 =𝛼 𝑡/𝛼𝑠. Finally,𝑚 denotes the one-hot mask token,1𝐾 the all-ones vector, and⟨·,·⟩
+the inner product.
+Uniform DiffusionUniform diffusion replaces clean tokens with tokens drawn uniformly at random
+from the vocabulary (Sahoo et al., 2025; Schiff et al., 2025). The reverse bridge distribution is defined
+as follows:
+𝑞𝑠|𝑡(𝑥𝑠|𝑥𝑡,𝑥 0)=Cat
+𝑥𝑡·(𝐾𝛼 𝑡⟨𝑥𝑡,𝑥 0⟩+𝛼 𝑡|𝑠−𝛼 𝑡)+𝑥 0·(𝛼 𝑠−𝛼 𝑡)+𝐷 𝑠,𝑡1𝐾/𝐾
+𝐾𝛼𝑡⟨𝑥𝑡,𝑥 0⟩+1−𝛼 𝑡
+
+,(1)
+where𝐷 𝑠,𝑡 =(1−𝛼 𝑡|𝑠)(1−𝛼 𝑠).
+To use this for generation, it is common to either substitute a neural network for𝑥0 as a plug-in
+parameterization, or to learn the denoiser𝑃(𝑋 0|𝑋𝑡). As shown in Gourevitch et al. (2026), it is possible
+to translate between these parameterizations. Thus we assume the denoiser parameterization.
+To sample from the bridge, we first sample𝑋0∼𝑃 𝜃(·|𝑋𝑡), 𝑈∼Cat( 1𝐾). For each position, we
+2
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+sample from Cat(𝑝𝑎𝑐𝑐𝑒𝑝𝑡·𝑥 0+𝑝 𝑠𝑡𝑎𝑦·𝑥 𝑡+𝑝 𝑛𝑜𝑖𝑠𝑒·𝑢)with probabilities defined as follows:
+𝑝𝑎𝑐𝑐𝑒𝑝𝑡 = 𝛼𝑠−𝛼 𝑡𝑍(𝑥𝑡,𝑥 0) (2)
+𝑝𝑠𝑡𝑎𝑦 =
+𝐾𝛼𝑡⟨𝑥𝑡,𝑥 0⟩+𝛼 𝑡|𝑠−𝛼 𝑡
+𝑍(𝑥𝑡,𝑥 0) (3)
+𝑝𝑛𝑜𝑖𝑠𝑒 = 𝐷𝑠,𝑡𝑍(𝑥𝑡,𝑥 0) (4)
+𝑍(𝑥𝑡,𝑥 0)=𝐾𝛼 𝑡⟨𝑥𝑡,𝑥 0⟩+1−𝛼 𝑡 (5)
+Masked DiffusionMasked diffusion incrementally corrupts a sequence by replacing tokens in
+sequence 𝑋 with a predefined “mask” token, which serves as the absorbing state for the process
+(Campbell et al., 2022; Sahoo et al., 2024; Shi et al., 2024). Given a keep rate𝛼𝑡, the corruption
+process is defined as follows:
+𝑞𝑡|0(·|𝑥 0)≈Cat (𝛼𝑡·𝑥 0+(1−𝛼 𝑡)·𝑚 ).
+Masked diffusion has seen success when scaling up diffusion language models (Nie et al., 2026; Ye
+et al., 2025). In monotone masked-diffusion samplers, an unmasked position remains fixed; methods
+that enable subsequent revisions have also been studied (Kim et al., 2025a). This freezing behavior
+is distinct from moving a position into a KV cache. We discuss masked diffusion for context; all
+experiments in this paper use the same uniform-diffusion model.
+Block DiffusionBlock diffusion is a technique that interpolates between autoregressive order and
+pure diffusion. Given a maximum context length𝐶, block diffusion splits this into evenly sized
+contiguous blocks𝑏 that are denoised in a left-to-right order (Arriola et al., 2025; Deschenaux &
+Gulcehre, 2026). This technique is useful as it allows for some form of KV caching whereas pure
+diffusion requires recomputing attention across all positions every step.
+2.2. Adaptive Samplers
+Adaptive acceptance rules use model predictions to choose which positions to update. Prior work on
+masked diffusion demonstrates the importance of generation order (Kim et al., 2025b). Towards this
+end, training-free adaptive sampling algorithms are commonly used as they require no architectural
+modifications (Nie et al., 2026; Ye et al., 2025). In general, such algorithms typically rely on the
+model’s logits to determine the ordering, although some also leverage the internal attention patterns
+(Kim et al., 2026a; Wu et al., 2026).
+Entropy Bound SamplerThe entropy-bound acceptance rule was introduced for masked-diffusion
+sampling by Ben-Hamu et al. (2026) and is used in the uniform-diffusion sampler of DiffusionGemma
+(DiffusionGemmaTeametal.,2026). Usingthiscriteriondoesnotimposeamaskedcorruptionprocess
+or require accepted positions to be frozen. As our study primarily investigates DiffusionGemma, we
+briefly review the EB sampler. The EB sampler sorts tokens by the predictive entropy in ascending
+order and accepts the largest subset𝑈such that:
+∑︁
+𝑖∈𝑈
+𝐻(𝑃 𝑖𝜃(·|𝑋𝑡))−max𝑖∈𝑈 𝐻(𝑃 𝑖𝜃(·|𝑋𝑡))≤𝛾.(6)
+Here, 𝛾≥ 0is a tunable hyperparameter, the entropy bound. As discussed in Ben-Hamu et al. (2026),
+this sampler approximately bounds joint dependence error when the model has low prediction error.
+3
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+Algorithm 1Generic Diffusion Sampler
+Require: Posterior𝑃𝜃, encoder prompt𝑥prompt, window size𝑤, noise prior𝜋, routing rule𝐹route(∗)→
+(Δ3)𝑤 =(𝑝 𝑎𝑐𝑐𝑒𝑝𝑡,𝑝 𝑠𝑡𝑎𝑦,𝑝 𝑛𝑜𝑖𝑠𝑒), commit rule𝐹commit(∗)→{0,1} 𝑤
+1:𝑋 done←𝑥 prompt
+2:𝑋∼𝜋(𝑉 𝑤)
+3:whileEosnot committeddo
+4: ˆ𝑋∼𝑃 𝜃(·|𝑋,𝑋 done)
+5:𝑈∼𝜋(𝑉 𝑤)
+6:[𝑝 𝑖accept,𝑝 𝑖stay,𝑝 𝑖noise]𝑤1←𝐹 route(𝑋, ˆ𝑋,𝑃 𝜃,∗)
+7:𝑋 𝑖∼Cat
+
+𝑝𝑖accept· ˆ𝑋𝑖+𝑝 𝑖stay·𝑋 𝑖+𝑝 𝑖noise·𝑈 𝑖
+
+8:[𝑐 1,...,𝑐 𝑤]←𝐹 commit(𝑋, ˆ𝑋,𝑃 𝜃,∗)⊲Binary readiness for each position
+9:𝑋 done←𝑋 done∪{𝑋 𝑖 :𝑐 𝑖 =1}⊲Commit contiguous prefix
+10:𝑋←{𝑋 𝑖 :𝑐 𝑖 =0}∪𝑋 new,𝑋 new∼𝜋(𝑉 𝑛),𝑛= ˝𝑖𝑐𝑖 ⊲Roll window and fill tail with fresh noise
+11:end while
+12:return𝑋 done
+3. Where and When: Two Choices for Every Position
+In this section, we write existing samplers in terms of a routing rule and a commitment rule (Algo-
+rithm 1, Table 1). We assume a diffusion model that learns the posterior𝑃(𝑋 0|𝑋𝑡), and takes both a
+denoising window and a KV cache as input. The denoising window represents tokens that are actively
+being denoised, and the KV cache corresponds to tokens that have been completely denoised.
+At every time-step, the sampler must answer the following two questions:
+1. Where does the token come from?Is it the predicted tokenˆ𝑋𝑖∼𝑃 𝜃(·|𝑋𝑡)𝑖, the previous value𝑋𝑖𝑡,
+or a fresh noisy token drawn from𝜋?
+2. When does the position get appended to the KV cache?Do we move the position to the KV cache,
+or keep it in the denoising window?
+To answer the first question, a sampler defines a routing rule𝐹𝑟𝑜𝑢𝑡𝑒 that specifies a point(𝑝𝑎𝑐𝑐𝑒𝑝𝑡,
+𝑝𝑠𝑡𝑎𝑦,𝑝 𝑛𝑜𝑖𝑠𝑒), which we refer to as the accept-stay-noise simplex. A position isacceptedwhen the routing
+rule takes the model’s prediction for the current step.
+The second question is answered by a commitment rule𝐹𝑐𝑜𝑚𝑚𝑖𝑡 that moves positions from the
+denoising window to the KV cache, after which their tokens can no longer change. Tying commitment
+to each position’s acceptance entangles these choices; a block or prefix rule instead waits for a
+set of positions to be accepted. The subscripts in𝑝𝑎𝑐𝑐𝑒𝑝𝑡 and 𝐹𝑐𝑜𝑚𝑚𝑖𝑡 denote acceptance and cache
+commitment, respectively.
+The Accept-Stay-Noise SimplexThe reverse bridge in equation 2 gives the probabilities of these
+three routing choices, with𝜋 as the prior distribution of the process. We borrow this routing view
+from RDM (Zheng et al., 2023), which introduces auxiliary routing variables and makes the available
+moves depend on whether the current token is already clean: a clean token either stays or is renoised,
+and a noisy token is either denoised or renoised. We introduce no auxiliary variables and place all
+three moves on a single simplex: the expectation of the clean-token indicator is the posterior’s mass
+on the current token, and the bridge already exposes the three moves without it.
+Furthermore, this aligns with the design principles behind the HackableDiffusion codebase, which
+4
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+Sampler𝑞 ˆ𝑋∼𝑝 𝑖accept 𝑝𝑖stay 𝑐𝑖
+Commit never / at block end
+Ancestral (uniform) unif𝑃 𝜃(·|𝑋 done)Eq. (2) Eq. (2)𝟙 [𝑡=0 ]
+Ancestral (masked) mask𝑃 𝜃(·|𝑋 done)𝟙 [𝑋𝑖 =𝑚] 𝛼𝑠−𝛼𝑡1−𝛼𝑡 1−𝑝 𝑖accept 𝟙[𝑡=0 ]
+Confidence
+(Nie et al., 2026; Wu et al., 2026) mask𝑃 𝜃 𝟙[𝑖∈𝐴 𝜏∧𝑋 𝑖 =𝑚] 1−𝑝 𝑖accept 𝟙[𝑚∉𝑋 ]
+EB
+(Ben-Hamu et al., 2026) mask𝑃 𝜃 𝟙
+
+𝑖∈𝐴 𝛾∧𝑋 𝑖 =𝑚
+
+1−𝑝 𝑖accept 𝟙[𝑚∉𝑋 ]
+Set Block Decoding
+(Gat et al., 2025) AR𝑃 𝜃(·|𝑋 done,𝑚,...,𝑚)𝟙
+
+𝑖∈𝐴 𝛾∧𝑋 𝑖 =𝑚
+
+1−𝑝 𝑖accept 𝟙[𝑚∉𝑋 ]
+DiffusionGemma block EB
+(DiffusionGemma Team et al., 2026) unif𝑃 𝜃 𝟙
+
+𝑖∈𝐴 𝛾
+
+0𝟙
+
+stable𝑠∧ ¯𝐻 < 𝜏𝐻
+
+Unified EB (ours) unif𝑃 𝜃 𝟙
+
+𝑖∈𝐴 𝛾
+
+0/1−𝑝 𝑖accept (ablated) 𝟙ℓ(𝐴𝛾)=𝑤 
+Frozen EB (ablation) unif𝑃 𝜃 𝟙
+
+𝑖∈𝐴 𝛾\𝐴 <𝑡 𝟙[𝑖∈𝐴 <𝑡] 𝟙ℓ(𝐴𝛾)=𝑤 
+Commit incrementally
+Jacobi / Lookahead
+(Fu et al., 2024; Santilli et al., 2023)ARarg max𝑃 𝜃(·|𝑋 done,𝑋 <𝑖)1 0𝟙
+ ˆ𝑋𝑗 =𝑋 𝑗∀𝑗≤𝑖 
+Adaptive Parallel Decoding
+(Israel et al., 2026) mask𝑃 𝜃 𝟙[𝑖≤ℓ(𝐴 mix)] 1−𝑝 𝑖accept 𝟙[𝑖≤ℓ(𝐴 mix)]
+DSB
+(Luo et al., 2026) mask𝑃 𝜃 𝟙[𝑖∈𝐴 𝜏∧𝑋 𝑖 =𝑚] 1−𝑝 𝑖accept 𝟙𝑖≤ℓ(𝐴 𝜏∪{𝑗:𝑋 𝑗 ≠𝑚}) 
+RES (ours) unif𝑃 𝜃 𝟙
+
+𝑖∈𝐴 𝛾
+
+0/1−𝑝 𝑖accept 𝟙𝑖≤ℓ(𝐴 𝛾) 𝟙ℓ(𝐴𝛾)≥𝑠 
+Table 1| Samplers as instances of Algorithm 1: proposalˆ𝑋, accept/stay probabilities (𝑝noise = 1−𝑝 accept−𝑝 stay),
+and commit rule𝑐𝑖. 𝐴𝛾 is the entropy-bound set (Eq. (6)),𝐴𝜏 the confidence set,ℓ(𝐴) the longest accepted
+prefix, 𝐴<𝑡 the positions accepted at earlier steps. Shaded cells highlight the commitment rules introduced
+here; RES with minimum shift𝑠=𝑤 recovers Unified EB when the remaining sampler settings, including the
+temperature schedule, are matched. Freezing is encoded by a rule that forces future stay probabilities to one,
+whereas 𝑐𝑖 denotes cache commitment. Frozen EB simulates per-position commitment by preventing later
+revision; RES waits for a contiguous accepted prefix and leaves accepted positions farther ahead revisable.
+is an open-source framework for diffusion models (Crepy et al., 2026).
+Adaptive Samplers as Routing RulesThe routing view was introduced to make this choice explicit:
+Zheng et al. (2023) observe that the standard sampler routes every token with the same probability,
+and that writing the router out allows more flexible decoding rules. Adaptive-order samplers fit
+this view directly, as each one specifies the accept-stay-noise point for every position at every step
+(Table 1). A related split appears in Liu et al. (2025), which separates planning (choosing which
+positions to change) from denoising (predicting the clean token). Our addition is the second axis:
+prior routing views describe where each token comes from, but not when a position is committed
+to the KV cache. The shared notation allows acceptance rules to be compared across corruption
+processes, while keeping their different noise distributions and constraints on future revisions explicit.
+Baseline: Unified EBThe default DiffusionGemma sampler accepts tokens with the entropy bound
+but commits a block with a separate stopping rule (Table 1). We replace that rule with the entropy
+bound itself: the block is committed once every position in the window is accepted in a single step.
+This leaves one hyper-parameter,𝛾, in control of both choices. Figure 1a shows that the unified rule
+matches the original rule at the default bound and keeps gaining throughput as𝛾 is relaxed, where
+the original rule stalls. We use Unified EB as the baseline for the rest of the paper.
+5
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+18 20 22 24 26
+Generation Speed (Tokens / Forward Pass )
+64
+66
+68
+70
+72
+74
+76
+78
+80Macro Pass@1 (%) 
+Macro Avg across LiveCodeBench v6, Natural2Code, GPQA Diamond
+Original EB (EB = 0.1 50.0, Chained Stability)
+ EB = 0.1 15.0)
+EB=0.1
+EB=0.5
+EB=1
+EB=2.5
+EB=5
+EB=7.5
+EB=10
+EB=15
+EB=50
+EB=0.1
+EB=0.5
+EB=1
+EB=2.5
+EB=5
+EB=7.5
+EB=10
+EB=15
+Macro Frontier: Unified EB vs. Original EB Baseline
+Unified EB (
+(a)Original vs. unified stopping.
+18 20 22 24 26 28
+Generation Speed (Tokens / Forward Pass )
+0
+10
+20
+30
+40
+50
+60
+70
+80Macro Pass@1 (%) 
+ 2 × 2 Ablation
+Noise Reinjection × Token Freezing (Macro Avg across LiveCodeBench v6, Natural2Code, GPQA Diamond)
+No Noise + Can Change (No Freeze, No Renoise)
+Noise + Can Change (No Freeze, Renoise)
+No Noise + Cannot Change (Freeze, No Renoise)
+Noise + Cannot Change (Freeze, Renoise)
+Macro Frontier: Unified EB (b)Frozen vs. base EB sampler.
+Figure 1| (a)The unified stopping criterion matches the original at a slight speedup.(b)Simulation of
+per-position commitment in DiffusionGemma: freezing each token upon acceptance removes the chance for
+later revision. Frozen variants degrade much faster than unfrozen variants as the entropy bound is relaxed,
+showing the cost of losing this sampler flexibility.
+4. Per-Position Commitment: Losing the Chance for Revision
+Committing tokens on a per-position basis removes the chance for later revision. We simulate this
+consequence of per-position commitment by freezing each token as soon as it is accepted by the EB
+rule. The main property we study is that the token can no longer change. We find that later revision
+becomes increasingly useful when trading off performance for speed at higher entropy bounds, and
+that self-correction persists without renoising.
+SetupWe focus on the EB sampler, as it is the default sampler used in DiffusionGemma Team
+et al. (2026). Our goal is to study the loss of sampler flexibility under per-position commitment,
+and determine whether later revisions require explicit noise injection. To do this, we measure the
+macro-average of LCB v6, Natural2Code, and GPQA Diamond. We vary two sampler choices: whether
+accepted positions are frozen, and whether rejected positions are renoised. The model weights and
+uniform corruption process are unchanged in all four conditions.
+Frozen EB SamplerThe Frozen EB ablation simulates per-position commitment: once a position is
+accepted under the EB rule, its token can no longer change. We retain the denoising window and
+blockwise cache commitment to isolate the loss of later revision. This simulation does not reproduce
+the attention changes or computational savings of actually moving individual positions into the KV
+cache. We refer to the unmodified Unified EB sampler as “unconstrained”, as any position can be
+changed regardless of whether it was already accepted under the EB rule.
+No NoiseTo test whether revisions require explicit noise injection, we additionally disable renoising
+of rejected positions. In this condition, rejected positions retain their current tokens, while accepted
+predictions can still revise unfrozen positions. This isolates the role of explicit renoising without
+changing the underlying model.
+AblationRemoving noise and freezing accepted tokens are two independent interventions. Thus we
+ablate over all four combinations and show the results in Figure 1b. For each possible combination,
+we do a sweep over various entropy bound values to examine how they are affected by more relaxed
+6
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+thresholds. For the unconstrained variants, we also track the empirical frequencies of each position
+being altered during the denoising trajectory after the initial acceptance under the EB rule. We show
+these position volatility metrics in Figure 3 (bottom row).
+ResultsWe observe that for each adaptive variant, the unconstrained sampler achieves a superior
+Pareto frontier than thefrozen sampler, and thisgap increases withfurther relaxation of the thresholds.
+At the loosest bound, the frozen variants fall to about 20% macro Pass@1, while the unconstrained
+variants stay near 70%.
+Furthermore, the number of positions that change after initial acceptance increases with higher
+entropy thresholds, and is relatively unaffected by whether the sampler uses noise injection. At
+the default bound of0.1, roughly 97% to 99% of accepted positions never change, so the default
+sampler behaves much like a frozen one; revisions become frequent only as the bound is relaxed. The
+simulation shows the cost of removing later revision on a per-position basis: accepting a token once
+does not mean that fixing it will preserve performance at higher entropy bounds. Self-correction also
+persists without renoising, so explicit noise injection is not necessary for these revisions.
+Per-position commitment therefore loses sampler flexibility as the entropy bound is relaxed. This
+motivates waiting for more than an individual position to be accepted before removing its chance for
+later revision.
+5. Block-Level Commitment: Wasting Denoising Slots
+At the other extreme, commitment is made at a block level: Unified EB retains every position in the
+denoising window until the whole block satisfies its stopping rule. Here we examine the order in which
+DiffusionGemma accepts tokens under the Unified EB sampler. We observe that DiffusionGemma
+exhibits a sampling order strongly biased towards autoregressive generation. This autoregressive bias
+results in many denoising slots within a canvas being "wasted" on tokens that have already converged.
+As a result, a form of rolling sampler where the window moves incrementally through the sequence
+rather than block by block becomes increasingly appealing as a way to extend the Pareto frontier.
+(a) Block sampler,𝑏=8: 19 passes
+𝑡=1
+𝑡=19
+(b) Rolling sampler,𝑤=8: 13 passes
+𝑡=1
+𝑡=13
+denoising slot accepted on this pass wasted: re-denoised while waiting
+in the KV cache not yet admitted
+Figure 2| Where the denoising slots go.Both samplers denoise a width-8window per pass in the same order,
+and the colours are those of Figure 4: teal = still denoising, amber = accepted on this pass, white = already
+encoded and in the KV cache, gray = not yet admitted. Brick marks a slot spent re-denoising a position that
+was already accepted but is still waiting for its prefix, that is, wasted work.(a)The block sampler appends only
+once the block is fully resolved, so converged positions idle and each block re-pays warm-up.(b)The rolling
+sampler appends the accepted prefix immediately and admits fresh positions in its place, wasting far fewer
+slots.
+7
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+1.00
+0.75
+0.50
+0.25
+0.00
+0.25
+0.50
+0.75
+1.00
+Rank Correlation with AR Order
+LiveCodeBench GPQA Natural2Code
+Spearman 
+Kendall b (hatched)
+Ideal AR order, one token per step ( = = +1.0)
+Step-matched AR ceiling (max attainable given ties)
+Uniform random order (step-matched permutation null)
+Median
+Mean
+Interquartile range (violin shows full range)
+2 4 6 8 10 12 14 16 18 20
+Denoising Step (t)
+0
+20
+40
+60
+80
+100
+% Wasted Denoising Slots
+Overall Wasted Rate: 27.6%
+Total Step Events: 75,401
+2 4 6 8 10 12 14 16 18 20
+Denoising Step (t)
+Overall Wasted Rate: 24.1%
+Total Step Events: 77,073
+2 4 6 8 10 12 14 16 18 20
+Denoising Step (t)
+Overall Wasted Rate: 26.3%
+Total Step Events: 15,375
+Mean % Wasted Median % Wasted 95% CI (Mean) Interquartile Range (25th 75th %)
+ Full Canvas (256 slots = 100%)
+0 2 4 6 8 10 12 14 16
+Entropy Bound (EB)
+75
+80
+85
+90
+95
+100
+1-Shot Stable Positions (%)
+LiveCodeBench
+0 2 4 6 8 10 12 14 16
+Entropy Bound (EB)
+GPQA
+0 2 4 6 8 10 12 14 16
+Entropy Bound (EB)
+Natural2Code
+Mean (line) Median (dotted) Interquartile range, 25th 75th pct. (shaded)
+ Renoise (task color, filled marker) No Noise (gray, open marker)
+Figure 3| Columns in the top and middle rows show LiveCodeBench, GPQA Diamond, and Natural2Code.Top
+row:Spearman 𝜌 and Kendall𝜏 between the acceptance order of the DiffusionGemma EB sampler and the
+AR generation order; across all tasks the sampler is strongly biased towards left-to-right order.Middle row:
+Percentage of wasted denoising slots averaged across canvases for LCB v6, GPQA Diamond and Natural2Code.
+For a given sampling step, a slot is wasted if it belongs to a contiguous prefix that has already converged
+to its final token. By denoising step 20, the mean fraction of wasted canvas slots exceeds 50% on all three
+tasks.Bottom row:Accepted tokens are revised more often at higher entropy bounds (in both argmax and
+sampled-token stability), independent of renoising.
+Defining Redundant ComputationsHere we define what constitutes a redundant computation.
+Our goal is to measure the computations that could conceivably be omitted without drastically
+impacting the model’s behavior. Thus we define wasted denoising slots as positions that have already
+converged and are part of a contiguous prefix that could be appended to the KV cache. We illustrate
+this definition in Figure 2, against the ideal sampler that commits them to the KV cache and avoids
+redundant denoising steps.
+Experimental SetupWe run the Unified EB sampler on LCB v6, GPQA Diamond and Natural2Code.
+We track the trajectories of each denoising block, and consider a position as converged when it realizes
+the value that ends up being committed to the KV cache.
+8
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+ResultsIn Figure 3 (top row), we observe that the first-acceptance order is strongly correlated with
+left-to-right order (Appendix A.1). At the default entropy bound, accepted positions rarely change,
+so this ordering serves as a proxy for convergence order. This is consistent with the behavior of
+wasted denoising slots in Figure 3 (middle row), where we observe that the percentage of wasted
+slots generally increases during the denoising trajectory.
+Asaria et al. (2026) previously observed this autoregressive bias in the DiffusionGemma sampler.
+This is not a model-specific quirk: this aligns with many general observations of the sampling
+behavior for confidence-based samplers for large scale diffusion language models. Kim et al. (2026b)
+demonstrates that confidence based samplers tend to generate samples that are very similar to those
+produced by left-to-right autoregressive order. Other works demonstrate that the ordering itself is
+highly left to right and provide various explanations for why (Gong et al., 2026; Lu et al., 2026; Yao,
+2026).
+Convergence in this measurement is identified retrospectively; during sampling, we use EB
+acceptance as the operational criterion for deciding which positions are ready to commit. Where per-
+position commitment loses the chance for later revision, block-level commitment tolerates redundant
+computation on converged prefixes. Section 6 introduces RES to strike a balance: wait for a contiguous
+accepted prefix, without waiting for the entire denoising window.
+6. RES: A Rolling Sampler
+Here we introduce the Rolling Entropy Sampler (RES) to strike a balance between per-position
+commitment and block-level commitment. Rather than committing each token as soon as it is
+accepted or waiting for the entire window, RES waits until a contiguous prefix of at least𝑠 positions
+has been accepted by the EB rule. The core mechanism is simple: instead of waiting for the entire
+block to converge, RES encodes any sufficiently long contiguous prefix of accepted tokens, appends it
+to the KV cache, and refills the freed slots with fresh noise. An accepted position farther ahead remains
+free to change until the preceding positions are also accepted and the minimum-shift condition is
+met. Waiting for the contiguous prefix preserves the chance for later revision without retaining the
+entire denoising window. Figure 4 illustrates the method.
+Commitment RuleIn the terms of Section 3, a rolling sampler is an adaptive sampler with a
+non-trivial commitment rule: in addition to a routing rule𝐹𝑟𝑜𝑢𝑡𝑒 on the accept-stay-noise simplex, it
+specifies𝐹 𝑐𝑜𝑚𝑚𝑖𝑡.
+RES can be interpreted as an extension of the block EB sampler used in DiffusionGemma. Rather
+than applying the entropy bound criterion solely to determine whether a prediction should be accepted
+or not, we also use it to determine whether to commit a contiguous prefix to the KV cache. The
+entropy bound criterion controls the predictive entropies of jointly accepted positions. Under the
+low-prediction-error assumption discussed in Section 2, equation 6 approximately bounds the joint
+dependence error incurred by factorized sampling (Ben-Hamu et al., 2026). Thus we use the EB
+criterion to define𝐹𝑐𝑜𝑚𝑚𝑖𝑡 as well as𝐹𝑟𝑜𝑢𝑡𝑒: RES commits the longest prefix of the window whose
+positions all lie in the accepted set𝐴𝛾, provided it meets the minimum shift criterion below (Table 1).
+RES is distinct from doing block diffusion with a smaller block size: while block diffusion denoises
+andcommitseachblockbeforemovingtothenext, REScommitsaprefixwhileretainingtheremaining
+positions in the denoising window. These positions preserve their denoising progress across shifts and
+remain available for further revision.
+9
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+step𝑡 t h e c a t m e r w s q 7 x v 9 k z 3 b 5
+10 positions per pass
+KV cache processed this pass not yet admitted
+attention mask
+keys→
+queries
+step𝑡+1 t h e c a t m e o w s l o u d 9 k z 3 b 5
+step𝑡+2 t h e c a t m e o w s l o u d 9 k z 3 b 5
+encoded prefix denoising window
+prefix window
+already encoded, in the KV cache prefix→prefix (causal)
+committed, encoded on this pass window→prefix
+accepted on this pass window↔window (bidirectional)
+accepted earlier, awaiting prefix masked out
+k not yet admitted (noise token)
+Figure 4| Three passes of the rolling sampler. Every pass spends a fixed budget of ten positions (dashed frame),
+split between anencoded prefixof the tokens committed on the previous pass and the remainingdenoising
+window; the mask panel on the right is exactly that block of ten.Left:positions keep their column, so each slot
+can be read down its column. Out-of-order acceptances wait for a contiguous prefix (w at𝑡) and unaccepted
+slots stay mutable (column ten:r→o ). The prefix completing at𝑡+1is four slots long, so four slots must be
+encoded at𝑡+2: the block advances by however many positions graduated into the KV cache, and the split
+is0+10, then2+8, then4+6.Right:rows are queries, columns are keys; a coloured cell means the query
+attends to the key. The encoded prefix is causal, so its KV-cache entries depend only on committed tokens and
+are never revised, while denoising positions are bidirectional among themselves and attend fully to the prefix.
+Committing more per pass therefore buys cache progress at the cost of denoising width on the next pass. Every
+query additionally attends to the whole KV cache (white cells), which the panels omit for space.
+Minimum Shift CriterionTo interpolate smoothly between Unified EB and fully incremental
+commitment, we introduce a minimum shift criterion: the contiguous prefix must contain at least𝑠
+tokens in order to be appended to the KV cache. This gives another axis for trading off performance
+for speed: by decreasing𝑠, it is possible to accelerate RES without altering the entropy bound. The
+minimum shift requires acceptance across a sufficiently long prefix before commitment, while leaving
+accepted positions farther ahead available for revision. When𝑠=𝑤 , the window size, we recover
+Unified EB, assuming the same temperature schedule. The minimum shift controls how much of the
+window must be accepted before a prefix can be committed. Even at𝑠= 1, commitment requires
+a prefix: an accepted position farther ahead cannot leave the window independently. Increasing𝑠
+requires a longer accepted prefix and moves the rule toward block-level commitment.
+6.1. Additional Modifications
+RES includes two further design choices, and we also note a property that follows from them.
+First, we use a position-based temperature schedule. Positions toward the left of the window have
+10
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+been denoised for longer than those that have just entered on the right, and the schedule reflects this,
+thus improving speed.
+Second, we merge the encoding and denoising steps. RES commits short prefixes frequently, so a
+separate encoding pass for each commit would cost more forward passes than rolling saves; merging
+makes rolling commitment efficient. All reported TPF numbers count every forward pass for both
+samplers, including Unified EB’s per-block encoding pass.
+Finally, becausethetemperatureschedulenolongerdependsonthemaximumnumberofdenoising
+steps, RES can be viewed as an anytime sampler.
+Position-based Temperature ScheduleOne natural consequence of the autoregressive bias of
+DiffusionGemma is that a token’s position in the rolling canvas provides a proxy for how close it is to
+having converged. Thus we can modify the standard temperature shaping applied in DiffusionGemma
+to be based on position rather than noise level. This accelerates tokens that are close to the prefix, as
+these are closer to being committed, while allowing for positions in the suffix to explore candidate
+tokens.
+Simultaneous Encoding and DenoisingOne other advantage of RES is that the number of tokens
+appended to the KV cache is much smaller than the total canvas. This allows for merging both the
+encoding step and the denoising step present in DiffusionGemma. More specifically, given a window
+of𝑤 positions and a contiguous prefix ofℓ accepted tokens, we use a causal mask for positions0to
+ℓ− 1, while positionsℓ to𝑤− 1have bidirectional attention. This keeps the number of processed
+positions per forward pass the same between the original DiffusionGemma sampler and RES, while
+ensuring that every step is performing denoising. We include a visualization of how the attention
+mask changes alongside the steps of RES in Figure 4.
+Anytime SamplingWhile Unified EB is highly adaptive, the temperature schedule is tied to the
+maximum DNS, which is a hyper-parameter that must be set. Ideally, the maximum DNS would only
+serve a time-out function to prevent sampler stalls, as opposed to controlling the logit shaping. One
+consequence of adopting the position-based temperature schedule is that the logit shaping becomes
+independent of the maximum number of DNS, making it ananytime sampler: the maximum number
+of denoising steps serves as a budget limit rather than controlling fundamental sampler behavior.
+7. Experiments
+7.1. Main Results
+We compare RES against Unified EB on seven benchmarks at the default entropy bound𝛾= 0.1,
+averaging over 20 seeds (5 for LiveCodeBench). Table 2 reports accuracy and tokens per forward pass
+(TPF).
+Performance and EfficiencyRES raises TPF on every benchmark, by 23% to 43%, andby 32.5% on
+the macro average(19.3 to 25.5). Macro accuracy falls by 1.9 points, from 80.7% to 78.8%. The cost
+is uneven across tasks. Accuracy rises on MMLU (+2.5points) and is unchanged within confidence
+intervals on GPQA Diamond; it falls by 0.5 to 2.8 points on GSM8k, HiddenMath, Natural2Code,
+and LiveCodeBench; and it falls by 10.7 points on IFEval, the one task where RES is clearly worse.
+Excluding IFEval, the macro drop is 0.5 points. One possible cause of the degradation is exposure
+11
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+Table 2| Comparison ofUnified EBvs.RESacross bench-
+marks (EB= 0.1,max_dns= 48). Scores reportAvg@20
+± 95% CI (Pass@1 averaged across 20 seeds; 5 seeds for
+LiveCodeBench). Relative TPF deltas are shown underneath.
+Unified EB RES
+Task Avg@20 TPF Avg@20 TPF
+LiveCodeBench 65.4%
+(±3.2%)
+18.7 62.6%
+(±3.2%)
+26.3
+(+40.6%)
+Natural2Code93.0%
+(±0.8%)
+22.9 91.3%
+(±0.9%)
+30.1
+(+31.7%)
+GPQA Diamond 67.5%
+(±1.5%)
+16.6 68.3%
+(±1.4%)
+23.8
+(+43.1%)
+HiddenMath73.9%
+(±0.9%)
+22.1 72.6%
+(±0.9%)
+27.2
+(+23.2%)
+GSM8k92.1%
+(±0.3%)
+21.7 91.6%
+(±0.3%)
+27.7
+(+28.0%)
+IFEval93.1%
+(±0.5%)
+16.8 82.4%
+(±0.7%)
+22.6
+(+34.4%)
+MMLU 80.3%
+(±0.4%)
+16.282.8%
+(±0.4%)
+21.0
+(+30.0%)
+Macro Average 80.7%
+(±0.5%)
+19.3 78.8%
+(±0.5%)
+25.5
+(+32.5%)
+1 2 4 6 8 10 12 14 16 18 20
+Number of Samples (k)
+78
+80
+82
+84
+86
+88
+90
+92
+94
+96Macro Average Pass@k (%)
+Macro Average Pass@k vs. Sample Count k
+Unified EB (shift=None)
+RES (shift=32)
+Figure 5| Macro Average Pass@𝑘 vs. Sample Count
+𝑘. While Unified EB achieves higher Pass@1, RES (𝑠=
+32) exhibits stronger multi-sample scaling, overtaking
+Unified EB at𝑘≥ 6and maintaining its advantage
+through 𝑘= 20. Table 2 reports a 32.5% increase in
+tokens per forward pass.
+20.0 22.5 25.0 27.5 30.0
+Tokens Per Forward (TPF) 
+68
+70
+72
+74
+76
+78
+Macro Pass@1 (%) 
+(a) Macro Average (3 Tasks)
+17.5 20.0 22.5 25.0 27.5 30.0
+Tokens Per Forward (TPF) 
+47.5
+50.0
+52.5
+55.0
+57.5
+60.0
+62.5
+65.0
+Task Pass@1 (%) 
+(b) LiveCodeBench v6 (Code)
+25 30 35
+Tokens Per Forward (TPF) 
+82
+84
+86
+88
+90
+92
+94
+96
+98
+Task Pass@1 (%) 
+(c) Natural2Code (Python)
+16 18 20 22 24 26 28
+Tokens Per Forward (TPF) 
+65
+66
+67
+68
+69
+70
+71
+72
+73
+Task Pass@1 (%) 
+(d) GPQA Diamond (Science)
+ EB = 0.1 15.0)
+ S = 32, sweeping EB)Unified EB ( RES (Minshift 
+Figure 6| Pareto frontiers of RES with minimum shift𝑠= 32and Unified EB under varied entropy bounds for
+LCB v6 and Natural2Code averaged over 5 seeds, and GPQA Diamond averaged over 20 seeds due to its higher
+evaluation variance.
+bias: RES induces a noise pattern across the window that is heavily left-to-right, which is distinct from
+the homogeneous noise level used within the block at training time. We do not test this explanation
+here.
+7.2. Speed-Quality Frontier
+We next sweep both knobs of RES, using the macro-average across LCB v6, GPQA Diamond, and
+Natural2Code.
+Entropy-Bound SweepWe sweep the entropy bound for RES with minimum shift𝑠= 32and for
+Unified EB, and show the frontiers in Figure 6. Relaxing the entropy bound alone takes Unified EB to
+about 25.5 TPF, where macro Pass@1 has fallen to about 71%. At a similar speed RES holds about
+74%, and it reaches the same 71% only at about 31 TPF. The gain is in the high-throughput regime:
+12
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+18 20 22 24 26 28 30 32
+Generation Speed (Tokens / Forward Pass )
+64
+66
+68
+70
+72
+74
+76
+78
+Macro Pass@1 (%) 
+(Macro Avg across LiveCodeBench v6, Natural2Code, GPQA Diamond)
+ EB = 0.1 15.0)
+S = 16, EB = 0.05 2.5
+S = 32, EB = 0.05 2.5
+S = 64, EB = 0.05 2.5
+S = 128, EB = 0.05 2.5
+S = 256, EB = 0.05 2.5
+Unified EB (
+RES: Entropy-Bound Scaling at Fixed Shift Lengths
+Figure 7| Frontiers obtained by varying both the minimum shift𝑠 in𝐹𝑐𝑜𝑚𝑚𝑖𝑡 (“S” in the legend) and the entropy
+bound in𝐹𝑟𝑜𝑢𝑡𝑒 for RES. Small shifts extend the frontier to higher throughput than Unified EB reaches.
+below about 23 TPF Unified EB remains the better choice, so RES extends the frontier rather than
+dominating it.
+Minimum Shift SweepWhile Unified EB has one axis to trade off performance and speed, RES has
+the minimum shift in addition to the entropy bound. Figure 7 shows the frontier for each minimum
+shift. Minimum shifts of 16 to 64 give similar frontiers, between about 26 and 31 TPF. Larger shifts
+move the frontier toward lower throughput:𝑠= 128covers about 23 to 28 TPF, and𝑠= 256about 18
+to 24 TPF. This direction is expected: a larger minimum shift requires a longer accepted prefix before
+commitment, moving the decision toward the block level and retaining positions in the denoising
+window for more computation. In this sweep the largest shift does not recover the accuracy of Unified
+EB at low throughput, so we recommend small shifts for the high-throughput regime and Unified EB
+otherwise.
+7.3. Multi-Sample Performance
+RES also scales better with the number of samples (Figure 5). Unified EB has the higher Pass@1, but
+RES with𝑠= 32overtakes it from𝑘≥ 6samples and maintains its advantage through𝑘= 20. We
+hypothesize that the EB sampler avoids making “difficult” decisions, as it always accepts the lowest
+entropy positions first. In contrast, the rolling mechanism along with the position-based temperature
+schedule enforces a left-to-right generation bias, which was shown in Ni et al. (2026) to improve
+diversity across generations.
+8. Related Works
+Here we discuss works that are closely related to the framework and sampler modifications proposed
+in this work.
+8.1. Adaptive Block Samplers
+Our work is not the first to suggest incrementally moving the denoising window: Luo et al. (2026)
+applies this to masked diffusion and sees performance gains. Gat et al. (2025) fine-tunes an auto-
+13
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+regressive model to simultaneously decode the masked tokens ahead using the EB sampler of Ben-
+Hamu et al. (2026) while generating the next token auto-regressively, which is the same core idea of
+a rolling denoising window. Furthermore, the denoising window is entirely defined by the entropy
+bound, which has been already defined in Ben-Hamu et al. (2026) and used in the original sampler
+of DiffusionGemma Team et al. (2026).
+Similar ideas of combining diffusion with the left-to-right bias of language have appeared even
+earlier, such as in (Wu et al., 2023). Our contribution is a study of the tradeoff between per-position
+commitment and block-level commitment, using DiffusionGemma as the experimental setting. Frozen
+EB simulates the loss of later revision under per-position commitment. RES waits for a contiguous
+accepted prefix, preserving sampler flexibility for accepted positions farther ahead while avoiding
+redundant computation on the prefix. The monotone masked-diffusion rules in Table 1 provide related
+examples of preventing later revision on a per-position basis, though freezing does not necessarily
+imply immediate KV caching.
+8.2. Rolling at Training Time: Clock Diffusion
+Concurrent with our work, Schiff et al. (2026) introduce Clock Diffusion, which develops essentially
+the same idea for Gaussian diffusion: a window that rolls left to right and commits finished positions to
+the KV cache, with a position-dependent noise schedule that mirrors our position-based temperature
+schedule.
+8.3. Rolling Diffusion Beyond Text
+Beyond text generation, the idea of rolling diffusion has been studied extensively in other domains.
+Within video generation, rolling diffusion was a natural mechanism to address the temporal nature of
+video generation and avoid performing diffusion on every frame simultaneously (Ruhe et al., 2024).
+Many other works include similar mechanisms (Chen et al., 2024; Song et al., 2025; Xie et al., 2025),
+and Papa et al. (2026) carry the idea over to images by assigning different patches different levels of
+corruption.
+9. Conclusion
+We studied two choices made by diffusion language samplers: where the next token comes from,
+and when the position is committed to the KV cache. Using the EB sampler in DiffusionGemma, we
+examined per-position commitment and block-level commitment. Freezing tokens upon acceptance
+simulates the loss of later revision under per-position commitment, which degrades performance at
+higher entropy bounds. Block-level commitment instead tolerates redundant computation on positions
+that have already converged. RES strikes a balance by waiting for a sufficiently long contiguous
+accepted prefix. Accepted positions farther ahead retain the chance for revision, while the prefix
+can leave without waiting for the entire window. Across seven benchmarks, RES raises tokens per
+forward pass by 32.5% at an average cost of 1.9 points of accuracy and extends the frontier at high
+throughput. Instruction following degrades more than other tasks, and the block sampler remains
+better at low throughput.
+Acknowledgments
+We thank Kelly He for thoughtful advice and input; Justin Deschenaux, Valentin De Bortoli, Alexandre
+Galashov, and Yazid Janati for all hands support; and Abel Gurung for insightful technical discussions.
+14
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+References
+Marianne Arriola, Aaron Gokaslan, Justin T. Chiu, Zhihan Yang, Zhixuan Qi, Jiaqi Han, Subham Sekhar Sahoo,
+and Volodymyr Kuleshov. Block diffusion: Interpolating between autoregressive and diffusion language
+models, 2025. URLhttps://arxiv.org/abs/2503.09573.
+Ali Asaria, Tony Salomone, and Deep Gandhi. Neither parallel nor sequential: How diffusiongemma actually
+commits tokens.arXiv preprint arXiv:2606.14620, 2026.
+Heli Ben-Hamu, Itai Gat, Daniel Severo, Niklas S Nolte, and Brian Karrer. Accelerated sampling from masked
+diffusion models via entropy bounded unmasking.Advances in Neural Information Processing Systems, 38:
+55981–56007, 2026.
+Andrew Campbell, Joe Benton, Valentin De Bortoli, Thomas Rainforth, George Deligiannidis, and Arnaud
+Doucet. A continuous time framework for discrete denoising models.Advances in Neural Information
+Processing Systems, 35:28266–28279, 2022.
+Boyuan Chen, Diego Martí Monsó, Yilun Du, Max Simchowitz, Russ Tedrake, and Vincent Sitzmann. Diffusion
+forcing: Next-token prediction meets full-sequence diffusion.Advances in Neural Information Processing
+Systems, 37:24081–24125, 2024.
+Clement Crepy, Valentin De Bortoli, Alexandre Galashov, Klaus Greff, and Ira Korshunova. Hackable Diffusion:
+A modular toolbox written in jax to experiment and educate around diffusion modeling., 2026. URL
+https://github.com/google/hackable_diffusion. Authors listed in alphabetical order by the
+last name.
+Justin Deschenaux and Caglar Gulcehre. Blockgen: Flexible blockwise sequence modeling with hybrid samplers.
+arXiv preprint arXiv:2606.02241, 2026.
+DiffusionGemma Team, Adrien Ali Taïga, James Assiene, Daniele Calandriello, Rahma Chaabouni, João Gante,
+Tamara von Glehn, Nate Keating, Chris Knutsen, Martin Kukla, et al. Diffusiongemma technical report.arXiv
+preprint arXiv:2608.00146, 2026.
+Yichao Fu, Peter Bailis, Ion Stoica, and Hao Zhang. Break the sequential dependency of llm inference using
+lookahead decoding.arXiv preprint arXiv:2402.02057, 2024.
+Itai Gat, Heli Ben-Hamu, Marton Havasi, Daniel Haziza, Jeremy Reizenstein, Gabriel Synnaeve, David Lopez-
+Paz, Brian Karrer, and Yaron Lipman. Set block decoding is a language model inference accelerator.arXiv
+preprint arXiv:2509.04185, 2025.
+Shansan Gong, Ruixiang Zhang, Huangjie Zheng, Jiatao Gu, Navdeep Jaitly, Lingpeng Kong, and Yizhe Zhang.
+Diffucoder: Understanding and improving masked diffusion models for code generation. InInternational
+Conference on Learning Representations, volume 2026, pp. 15723–15750, 2026.
+Samson Gourevitch, Yazid Janati, Dario Shariatian, Umut Simsekli, Eric Moulines, Eric P Xing, and Alain
+Durmus. Uniform diffusion models revisited: Leave-one-out denoiser and absorbing state reformulation.
+arXiv preprint arXiv:2605.22765, 2026.
+Daniel Israel, Guy Van den Broeck, and Aditya Grover. Accelerating diffusion llms via adaptive parallel decoding.
+Advances in neural information processing systems, 38:52870–52888, 2026.
+Jaeyeon Kim, Seunggeun Kim, Taekyun Lee, David Z Pan, Hyeji Kim, Sham Kakade, and Sitan Chen. Fine-tuning
+masked diffusion for provable self-correction.arXiv preprint arXiv:2510.01384, 2025a.
+Jaeyeon Kim, Kulin Shah, Vasilis Kontonis, Sham Kakade, and Sitan Chen. Train for the worst, plan for the
+best: Understanding token ordering in masked diffusions.arXiv preprint arXiv:2502.06768, 2025b.
+Seo Hyun Kim, Sunwoo Hong, Hojung Jung, Youngrok Park, and Se-Young Yun. Klass: Kl-guided fast inference
+in masked diffusion models.Advances in Neural Information Processing Systems, 38:92267–92301, 2026a.
+Seunggeun Kim, Jaeyeon Kim, Taekyun Lee, Yuyuan Chen, Yilun Du, Sham Kakade, and Sitan Chen. From
+interface to inference: Eliciting any-order inference from any-order models.arXiv preprint arXiv:2607.26504,
+2026b.
+Sulin Liu, Juno Nam, Andrew Campbell, Hannes Stärk, Yilun Xu, Tommi Jaakkola, and Rafael Gómez-
+Bombarelli. Think while you generate: Discrete diffusion with planned denoising. InInternational Conference
+on Learning Representations, volume 2025, pp. 81979–82026, 2025.
+Guanxi Lu, Hao Chen, Yuto Karashima, Zhican Wang, Daichi Fujiki, and Hongxiang Fan. Adablock-dllm:
+Semantic-aware diffusion llm inference via adaptive block size. InInternational Conference on Learning
+15
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+Representations, volume 2026, pp. 140018–140033, 2026.
+Lizhuo Luo, Shenggui Li, Yonggang Wen, and Tianwei Zhang. Dsb: Dynamic sliding block scheduling for
+diffusion llms.arXiv preprint arXiv:2602.05992, 2026.
+Zanlin Ni, Shenzhi Wang, Yang Yue, Tianyu Yu, Weilin Zhao, Yeguo Hua, Tianyi Chen, Jun Song, Cheng Yu,
+Bo Zheng, et al. The flexibility trap: Why arbitrary order limits reasoning potential in diffusion language
+models.arXiv preprint arXiv:2601.15165, 2026.
+Shen Nie, Fengqi Zhu, Zebin You, Xiaolu Zhang, Jingyang Ou, Jun Hu, Jun Zhou, Yankai Lin, Ji-Rong Wen,
+and Chongxuan Li. Large language diffusion models.Advances in Neural Information Processing Systems, 38:
+50608–50646, 2026.
+Samuele Papa, Valentin De Bortoli, Guillaume Couairon, Romuald Elie, Klaus Greff, et al. Asyncpatch diffusion:
+spatially-flexible image generation.arXiv preprint arXiv:2606.07079, 2026.
+David Ruhe, Jonathan Heek, Tim Salimans, and Emiel Hoogeboom. Rolling diffusion models.arXiv preprint
+arXiv:2402.09470, 2024.
+Subham S Sahoo, Marianne Arriola, Yair Schiff, Aaron Gokaslan, Edgar Marroquin, Justin T Chiu, Alexander
+Rush, and Volodymyr Kuleshov. Simple and effective masked diffusion language models.Advances in Neural
+Information Processing Systems, 37:130136–130184, 2024.
+Subham Sekhar Sahoo, Justin Deschenaux, Aaron Gokaslan, Guanghan Wang, Justin Chiu, and Volodymyr
+Kuleshov. The diffusion duality.Proceedings of machine learning research, 267:52584, 2025.
+Andrea Santilli, Silvio Severino, Emilian Postolache, Valentino Maiorca, Michele Mancusi, Riccardo Marin, and
+Emanuele Rodolà. Accelerating transformer inference for translation via parallel decoding. InProceedings
+of the 61st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pp.
+12336–12355, 2023.
+Yair Schiff, Subham Sahoo, Hao Phung, Guanghan Wang, Sam Boshar, Hugo Dalla-Torre, Bernardo Almeida,
+Alexander Rush, Thomas Pierrot, and Volodymyr Kuleshov. Simple guidance mechanisms for discrete
+diffusion models. InInternational Conference on Learning Representations, volume 2025, pp. 43776–43821,
+2025.
+Yair Schiff, Omer Belhasin, Roy Uziel, Matan Rusanovsky, Ran Zilberstein, Marianne Arriola, Gilad Turok,
+Guanghan Wang, Volodymyr Kuleshov, and Michael Elad. Clock diffusion: Efficient semi-autoregressive
+continuous diffusion language models.arXiv preprint arXiv:2610.00894, 2026.
+Jiaxin Shi, Kehang Han, Zhe Wang, Arnaud Doucet, and Michalis Titsias. Simplified and generalized masked
+diffusion for discrete data.Advances in neural information processing systems, 37:103131–103167, 2024.
+Jiaming Song, Chenlin Meng, and Stefano Ermon. Denoising diffusion implicit models.arXiv preprint
+arXiv:2010.02502, 2020.
+Kiwhan Song, Boyuan Chen, Max Simchowitz, Yilun Du, Russ Tedrake, and Vincent Sitzmann. History-guided
+video diffusion.arXiv preprint arXiv:2502.06764, 2025.
+Chengyue Wu, Hao Zhang, Shuchen Xue, Shizhe Diao, Yonggan Fu, Zhijian Liu, Pavlo Molchanov, Ping Luo,
+Song Han, and Enze Xie. Fast-dllm v2: Efficient block-diffusion llm. InInternational Conference on Learning
+Representations, volume 2026, pp. 128353–128370, 2026.
+Tong Wu, Zhihao Fan, Xiao Liu, Hai-Tao Zheng, Yeyun Gong, Jian Jiao, Juntao Li, Jian Guo, Nan Duan, Weizhu
+Chen, et al. Ar-diffusion: Auto-regressive diffusion model for text generation.Advances in Neural Information
+Processing Systems, 36:39957–39974, 2023.
+Desai Xie, Zhan Xu, Yicong Hong, Hao Tan, Difan Liu, Feng Liu, Arie Kaufman, and Yang Zhou. Progressive
+autoregressive video diffusion models. In2025 IEEE/CVF Conference on Computer Vision and Pattern
+Recognition Workshops (CVPRW), pp. 6312–6322. IEEE, 2025.
+Lin Yao. Decoding in order-agnostic language models: Chain-rule deviation and uniform spreading.arXiv
+preprint arXiv:2606.00997, 2026.
+Jiacheng Ye, Zhihui Xie, Lin Zheng, Jiahui Gao, Zirui Wu, Xin Jiang, Zhenguo Li, and Lingpeng Kong. Dream
+7b: Diffusion large language models, 2025. URLhttps://arxiv.org/abs/2508.15487.
+Lin Zheng, Jianbo Yuan, Lei Yu, and Lingpeng Kong. A reparameterized discrete diffusion model for text
+generation.arXiv preprint arXiv:2302.05737, 2023.
+16
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+A. Appendix
+A.1. Computation of Order Statistics
+Here we provide details on how the order statistics in Figure 3 (top row) are calculated.
+Acceptance EventTo track the ordering for the Unified EB sampler, we look at the first acceptance
+per position, as the standard entropy bound of0.1results in positions rarely changing after the first
+acceptance. Concretely, for a canvas of𝑏 positions 𝑋1,...,𝑋 𝑏 denoised over𝑇 steps, we record for
+each position the step at which it is first accepted,
+𝑐𝑖 =min
+
+𝑡∈{1,...,𝑇}:𝑋 𝑖 is accepted at step𝑡
+	
+,(7)
+setting 𝑐𝑖 =𝑇 for the rare positions never accepted. Each generated canvas therefore yields an
+acceptance-step vector𝑐∈{ 1,...,𝑇} 𝑏. A purely autoregressive sampler would produce𝑐𝑖 =𝑖 , so we
+measure how closely𝑐 tracks the left-to-right index. These are first-acceptance times, not the times at
+which positions enter the KV cache.
+Resolving TiesSince our goal is to compare the ranking of positions based on acceptance step,
+there must be a way to resolve the ties between tokens that are accepted on the same step. To resolve
+this, we take the approach of averaging the order ranking across slots that are tied, assigning each
+position the fractional midrank
+𝑟𝑖 =
+{𝑘:𝑐 𝑘 < 𝑐𝑖}+ 12 1+ {𝑘:𝑐 𝑘 =𝑐 𝑖}.(8)
+Given the list of acceptance steps 𝑐=[ 1, 3, 1, 2, 3, 3], we first sort them in ascending order,
+[1, 1, 2, 3, 3, 3]. The positions accepted on the first step occupy the first and second ranking
+slots, so both are assigned the average rank1.5; likewise the three positions accepted on the third step
+occupy slots four through six and are each assigned5. Returning these ranks to their original positions
+yields 𝑟=[ 1.5, 5, 1.5, 3, 5, 5]. Averaging within tie groups keeps tied positions exchangeable,
+so the statistic does not depend on an arbitrary tie-breaking order, and preserves the rank sum˝
+𝑖𝑟𝑖 =𝑏(𝑏+1)/2.
+Spearman 𝜌 Given the vector of rankings, we compare it against the standard left-to-right rankings
+[1, 2,...,𝑏− 1,𝑏] and take the Pearson correlation coefficient to be the Spearman rank correlation𝜌.
+Writing𝜋 𝑖 =𝑖for the reference ranking,
+𝜌=
+˝𝑏
+𝑖=1(𝜋𝑖−¯𝜋)(𝑟𝑖−¯𝑟)√︃˝𝑏
+𝑖=1(𝜋𝑖−¯𝜋)2
+√︃˝𝑏
+𝑖=1(𝑟𝑖−¯𝑟)2
+,¯𝜋=¯𝑟= 𝑏+12 .(9)
+We use this general form rather than the familiar1− 6˝𝑖𝑑2𝑖/ 𝑏(𝑏 2− 1), which is valid only when
+the ranks are untied.
+Kendall𝜏 Spearman rank correlation may not reflect the true behavior, as it is quadratic in terms of
+the differences per position. Thus we also calculate the Kendall𝜏, as it counts inversions and is thus
+less sensitive to large differences. More specifically, for every position pair(𝑋𝑖,𝑋 𝑗) with 𝑖 < 𝑗, the pair
+isconcordantif 𝑋𝑖 was accepted earlier than𝑋𝑗,discordantif 𝑋𝑗 was accepted earlier, andtiedif both
+were accepted on the same step. Over all𝑛0 =  𝑏2 pairs we count
+𝑛𝑐 =
+{(𝑖, 𝑗):𝑖 < 𝑗, 𝑐𝑖 < 𝑐𝑗}, 𝑛 𝑑 = {(𝑖, 𝑗):𝑖 < 𝑗, 𝑐𝑖 > 𝑐𝑗}, 𝑛 𝑡 =𝑛 0−𝑛 𝑐−𝑛 𝑑.(10)
+17
+RES: Accelerating Diffusion Language Models with Rolling Entropy Sampling2026-11-20
+Because the reference ranking is strictly increasing, it contributes no ties of its own, and every tied
+pair is tied in acceptance step. We report the tie-corrected𝜏𝑏, which normalises by the pairs whose
+order is resolvable at all,
+𝜏𝑏 = 𝑛𝑐−𝑛 𝑑√︁
+𝑛0(𝑛0−𝑛 2)
+, 𝑛 2 =
+𝑇∑︁
+𝑠=1
+𝑚𝑠
+2
+
+,(11)
+where 𝑚𝑠 is the number of positions first accepted at step𝑠. We additionally report the pairwise
+left-to-right agreement rate, which counts ties as half-agreements,
+𝑃l2r =
+𝑛𝑐+ 12𝑛𝑡
+𝑛0
+,(12)
+equal to50%under a random acceptance order and100%under a purely left-to-right one.
+KDE EstimateTo get the shape of the distribution, we use the default KDE estimator in matplotlib.
+18

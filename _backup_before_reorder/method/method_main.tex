@@ -1,0 +1,38 @@
+Here we introduce \algname, a sampler designed to leverage the auto-regressive bias of DiffusionGemma to minimize redundant computations on converged tokens.
+The core mechanism is straightforward: instead of waiting for the entire block to converge, we autoregressively encode and append the KV cache for any contiguous prefix of converged tokens.
+We first introduce the core method, along with the pseudo-code. 
+We include a diagram of the method in Figure \ref{fig:algorithm-concept}. 
+\input{method/method_fig}
+
+\paragraph{Extending Adaptive Samplers}
+In general, we can interpret rolling samplers as a natural extension of adaptive samplers: in addition to defining functions that map into the accept-stay-noise simplex, rolling samplers also specify $F_{commit}$.
+
+\algname can be interpreted as an extension of the block EB sampler used in DiffusionGemma.
+Rather than applying the entropy bound criterion solely to determine whether a prediction should be accepted or not, we also use it to determine whether commit to a contiguous prefix to the KV cache.
+The entropy bound criterion serves as a means to accept tokens that are simultaneously highly confident and uncorrelated with each other, as \eqref{eq:eb-bound} bounds the error incurred from factorized sampling \citep{ben2026accelerated}.
+Thus we used the EB criterion to define $F_{commit}$ as well as $F_{trans}$.
+
+\input{experiments/results_panels}
+\Needspace{19\baselineskip}
+\input{experiments/minshift-frontiers}
+
+\paragraph{Minimum Shift Criterion}
+In order to enable smooth interpolation between the original block EB sampler and \algname, we introduce a minimum shift criterion: the contiguous prefix must at least contain the minimum shift value $m$ tokens in order to be appended to the KV cache. We find that allows for another axis for trading off performance for speed: by decreasing $m$, it is possible to accelerate the rolling sampler without altering the entropy bound. 
+Furthermore, such a minimum shift criterion aligns with our desirata for tokens ready to commit to the KV cache: we would want them to be highly confident and uncorrelated with other tokens, as being correlated with other tokens means that the token could potentially change based on future fluctuations.When $m=B$, we recover the original unified EB sampler, assuming the same temperature schedule.
+\input{method/attention_mask}
+
+\paragraph{Position-based Temperature Schedule}
+One natural consequence of the autoregressive bias of DiffusionGemma is that a token's position in the rolling canvas directly corresponds to how close it is to having converged. 
+Thus we can modify the standard temperature shaping applied in DiffusionGemma to be based on position rather than noise level. 
+This accelerates tokens that are close to the prefix, as these are closer to being committed, while allowing for positions in the suffix to explore candidate tokens.
+
+\paragraph{Simultaneous Encoding and Denoising}
+One other advantage of the rolling sampler is that the number of tokens appended to the KV cache is much smaller than the total canvas. This allows for merging both the encoding step and the denoising step present in DiffusionGemma. 
+More specifically, given a window of $B$ positions and a contiguous prefix of $m$ accepted tokens, we use a causal mask for positions $0$ to $m-1$, while positions $m$ to $B-1$ have bidirectional attention.
+This keeps the per forward cost the same between the original DiffusionGemma sampler and the rolling sampler, while ensuring that every step is performing denoising. 
+We include a visualization of how the attention mask changes alongside the steps of the rolling sampler in Figure \ref{fig:algorithm-concept}. 
+
+\paragraph{Any-time Sampling}
+While the unified EB sampler is highly adaptive, the temperature schedule is tied to the maximum DNS, which is a hyper-parameter that must be set. 
+Ideally, the maximum DNS would only serve a time-out function to prevent sampler stalls, as opposed to controlling the logit shaping.
+One consequence of adopting the position-based temperature schedule is that the logit shaping becomes independent of the maximum number of DNS, making it an \textit{any-time sampler}: the maximum denoising steps serves as the maximum budget possible rather than controlling fundamental sampler behavior.

@@ -1,0 +1,19 @@
+Here we discuss works that are closely related to the framework and sampler modifications proposed in this work.
+
+\subsection{Adaptive Block Samplers}
+Our work is not the first to suggest incrementally moving the denoising window: \citet{luo2026dsb} applies this to masked diffusion and sees performance gains.
+\citet{gat2025set} fine-tunes an auto-regressive model to simultaneously decode the masked tokens ahead using the EB sampler of \citet{ben2026accelerated} while generating the next token auto-regressively, which is the same core idea of a rolling denoising window.
+Furthermore, the denoising window is entirely defined by the entropy bound, which has been already defined in \citet{ben2026accelerated} and used in the original sampler of \citet{team2026diffusiongemma}.
+
+Similar ideas of combining diffusion with the left-to-right bias of language have appeared even earlier, such as in \citep{wu2023ar}.
+Our contribution is therefore not the rolling window itself, but the separation of acceptance from commitment.
+The incremental samplers above freeze a token when it is accepted (Table~\ref{tab:samplers}); under uniform diffusion, RES leaves accepted positions outside the committed prefix free to change.
+
+\subsection{Rolling at Training Time: Clock Diffusion}
+Concurrent with our work, \citet{schiff2026clock} introduce Clock Diffusion, which develops essentially the same idea for Gaussian diffusion: a window that rolls left to right and commits finished positions to the KV cache, with a position-dependent noise schedule that mirrors our position-based temperature schedule.
+Unlike RES, which is training-free, Clock Diffusion builds this pattern into training and reports strong results, so further aligning the inference process with training represents a very fruitful direction.
+
+\subsection{Rolling Diffusion Beyond Text}
+Beyond text generation, the idea of rolling diffusion has been studied extensively in other domains.
+Within video generation, rolling diffusion was a natural mechanism to address the temporal nature of video generation and avoid performing diffusion on every frame simultaneously \citep{ruhe2024rolling}. 
+Many other works include similar mechanisms \citep{chen2024diffusion, song2025history, xie2025progressive}, and \citet{papa2026asyncpatch} carry the idea over to images by assigning different patches different levels of corruption.

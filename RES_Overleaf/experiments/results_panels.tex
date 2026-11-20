@@ -1,0 +1,26 @@
+% Prepare the two results figures before Figure 7, preserving reference numbers.
+\newsavebox{\resultspanels}
+\begin{lrbox}{\resultspanels}
+\begin{minipage}{\textwidth}
+\captionsetup{hypcap=false}
+\centering
+\begin{minipage}[c]{0.49\textwidth}
+\input{experiments/pass_k_breakout}
+\end{minipage}\hfill
+\begin{minipage}[c]{0.49\textwidth}
+\centering
+\includegraphics[width=\linewidth]{images/fig_macro_pass_at_k.pdf}
+\captionof{figure}{\textbf{Macro Average Pass@$k$ vs.\ Sample Count $k$}. While Unified EB achieves higher Pass@1, RES ($s=32$; ``Rolling'' in the legend) exhibits stronger multi-sample scaling, overtaking Unified EB at $k \ge 6$ to reach $93.58\%$ Pass@20 while running $+31.3\%$ faster.}
+\label{fig:macro_pass_at_k}
+
+\end{minipage}
+\par\vspace{12pt}
+\begin{minipage}{\textwidth}
+\centering
+    \includegraphics[width=\linewidth]{images/fig_merged_minshift32_eb01_1x4_row.pdf}
+    \captionof{figure}{Pareto frontiers of RES with minimum shift $s=32$ (``Merged Sampler'') and Unified EB (``Standard EB Baseline'') under varied EB bounds $.05 \to 1.0$ for LCB v6 and Natural2Code with 5 seed averages, and GPQA Diamond with 20 seed averages due to high noise in the eval.}
+    \label{fig:minshift-16}
+
+\end{minipage}
+\end{minipage}
+\end{lrbox}

@@ -1,0 +1,56 @@
+We study uniform diffusion with a denoising window and KV caching. We review its corruption process and entropy-bound acceptance, and include masked diffusion as background for comparing sampler rules.
+\subsection{Discrete Diffusion}
+Here we cover the relevant background for discrete diffusion.
+When referring to a sequence, we will use upper-case $X$ whereas individual tokens will be represented by $x$, written as one-hot vectors over a vocabulary of size $K$.
+We write $x_0$ for a clean token and $x_t$ for its noisy version at time $t \in [0, 1]$, and we take $s < t$, so that $x_s$ is a less noisy version of $x_t$.
+The keep rate $\alpha_t \in [0, 1]$ decreases from $\alpha_0 = 1$ to $\alpha_1 = 0$, and $\alpha_{t|s} = \alpha_t / \alpha_s$.
+Finally, $m$ denotes the one-hot mask token, $\mathbf{1}_K$ the all-ones vector, and $\langle \cdot, \cdot \rangle$ the inner product.
+
+\paragraph{Uniform Diffusion}
+Uniform diffusion replaces clean tokens with tokens drawn uniformly at random from the vocabulary \citep{schiff2025simple, sahoo2025diffusion}.
+The reverse bridge distribution is defined as follows:
+\begin{align}
+\label{eq:bridge}
+    q_{s|t}(x_s | x_t, x_0) = \text{Cat} \left( \frac{x_t \cdot (K\alpha_t \langle x_t, x_0 \rangle + \alpha_{t|s} - \alpha_t) + x_0 \cdot ( \alpha_s - \alpha_t) + D_{s,t} \mathbf{1}_K / K}{K \alpha_t \langle x_t, x_0 \rangle + 1 - \alpha_t} \right),
+\end{align}
+where $D_{s,t} = (1 - \alpha_{t|s})(1 - \alpha_s)$.
+
+To use this for generation, it is common to either substitute a neural network for $x_0$ as a plug-in parameterization, or to learn the denoiser $P(X_0 | X_t)$. As shown in \citet{gourevitch2026uniform}, it is possible to translate between these parameterizations. Thus we assume the denoiser parameterization.
+
+To sample from the bridge, we first sample $X_0 \sim P_{\theta}(\cdot | X_t)$, $U \sim \text{Cat}(\frac{1}{K})$.
+For each position, we sample from $\text{Cat}(p_{accept} \cdot x_0 + p_{stay} \cdot x_t + p_{noise} \cdot u)$ with probabilities defined as follows:
+\begin{align}
+\label{eq:true-rev-coords}
+    p_{accept} &= \frac{\alpha_s - \alpha_t}{Z(x_t, x_0)} \\
+    p_{stay} &= \frac{K\alpha_t \langle x_t, x_0 \rangle + \alpha_{t|s} - \alpha_t}{Z(x_t, x_0)} \\
+    p_{noise} &= \frac{D_{s,t}}{Z(x_t, x_0)} \\
+    Z(x_t, x_0) &= K \alpha_{t} \langle x_t, x_0 \rangle + 1 - \alpha_t
+\end{align}
+
+\paragraph{Masked Diffusion}
+Masked diffusion incrementally corrupts a sequence by replacing tokens in sequence $X$ with a predefined ``mask'' token, which serves as the absorbing state for the process \citep{campbell2022continuous, sahoo2024simple, shi2024simplified}.
+Given a keep rate $\alpha_t$, the corruption process is defined as follows:
+\[
+q_{t|0}(\cdot | x_0) \approx \text{Cat} \left( \alpha_t \cdot x_0 + (1 - \alpha_t) \cdot m\right).
+\]
+Masked diffusion has seen success when scaling up diffusion language models \citep{nie2026large, ye2025dream7bdiffusionlarge}.
+In monotone masked-diffusion samplers, an unmasked position remains fixed; methods that enable subsequent revisions have also been studied \citep{kim2025fine}. This freezing behavior is distinct from moving a position into a KV cache. We discuss masked diffusion for context; all experiments in this paper use the same uniform-diffusion model.
+
+\paragraph{Block Diffusion}
+Block diffusion is a technique that interpolates between autoregressive order and pure diffusion. Given a maximum context length $C$, block diffusion splits this into evenly sized contiguous blocks $b$ that are denoised in a left-to-right order \citep{arriola2025blockdiffusioninterpolatingautoregressive, deschenaux2026blockgen}.
+This technique is useful as it allows for some form of KV caching whereas pure diffusion requires recomputing attention across all positions every step.
+
+\subsection{Adaptive Samplers}
+Adaptive acceptance rules use model predictions to choose which positions to update. Prior work on masked diffusion demonstrates the importance of generation order \citep{kim2025train}.
+Towards this end, training-free adaptive sampling algorithms are commonly used as they require no architectural modifications \citep{nie2026large, ye2025dream7bdiffusionlarge}.
+In general, such algorithms typically rely on the model's logits to determine the ordering, although some also leverage the internal attention patterns \citep{kim2026klass, wu2026fast}.
+
+\paragraph{Entropy Bound Sampler}
+The entropy-bound acceptance rule was introduced for masked-diffusion sampling by \citet{ben2026accelerated} and is used in the uniform-diffusion sampler of DiffusionGemma \citep{team2026diffusiongemma}. Using this criterion does not impose a masked corruption process or require accepted positions to be frozen.
+As our study primarily investigates DiffusionGemma, we briefly review the EB sampler.
+The EB sampler sorts tokens by the predictive entropy in ascending order and accepts the largest subset $U$ such that:
+\begin{align}
+    \label{eq:eb-bound}
+    \sum_{i \in U} H(P_{\theta}^i(\cdot | X_t)) - \max_{i \in U}  H(P_{\theta}^i(\cdot | X_t)) \le \gamma.
+\end{align}
+Here, $\gamma \ge 0$ is a tunable hyperparameter, the entropy bound. As discussed in \citet{ben2026accelerated}, this sampler approximately bounds joint dependence error when the model has low prediction error.

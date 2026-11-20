@@ -1,0 +1,110 @@
+Here we briefly review discrete diffusion, block diffusion, and the entropy-bound sampler that this work extends.
+\subsection{Discrete Diffusion}
+Here we cover the relevant background for discrete diffusion. 
+When referring to a sequence, we will use upper-case $X$ whereas individual tokens will be represented by $x$, written as one-hot vectors over a vocabulary of size $K$.
+We write $x_0$ for a clean token and $x_t$ for its noisy version at time $t \in [0, 1]$, and we take $s < t$, so that $x_s$ is a less noisy version of $x_t$.
+The keep rate $\alpha_t \in [0, 1]$ decreases from $\alpha_0 = 1$ to $\alpha_1 = 0$, and $\alpha_{t|s} = \alpha_t / \alpha_s$.
+Finally, $m$ denotes the one-hot mask token, $\mathbf{1}_K$ the all-ones vector, and $\langle \cdot, \cdot \rangle$ the inner product.
+
+\paragraph{Masked Diffusion}
+Masked diffusion incrementally corrupts a sequence by replacing tokens in sequence $X$ with a predefined ``mask'' token, which serves as the absorbing state for the process \citep{campbell2022continuous, sahoo2024simple, shi2024simplified}.
+Given a keep rate $\alpha_t$, the corruption process is defined as follows: 
+\[
+q_{t|0}(\cdot | x_0) \approx \text{Cat} \left( \alpha_t \cdot x_0 + (1 - \alpha_t) \cdot m\right).
+\]
+Masked diffusion has seen success when scaling up diffusion language models \citep{nie2026large, ye2025dream7bdiffusionlarge}.
+One drawback of this masked diffusion process is that it does not inherently allow for self correction, and thus enabling masked diffusion to self-correct is an active area of research \citep{kim2025fine}.
+
+\paragraph{Uniform Diffusion}
+Uniform diffusion instead replaces clean tokens with tokens drawn uniformly at random from the vocabulary \citep{schiff2025simple, sahoo2025diffusion}.
+The reverse bridge distribution is defined as follows: 
+\begin{align}
+\label{eq:bridge}
+    q_{s|t}(x_s | x_t, x_0) = \text{Cat} \left( \frac{x_t \cdot (K\alpha_t \langle x_t, x_0 \rangle + \alpha_{t|s} - \alpha_t) + x_0 \cdot ( \alpha_s - \alpha_t) + D_{s,t} \mathbf{1}_K / K}{K \alpha_t \langle x_t, x_0 \rangle + 1 - \alpha_t} \right),
+\end{align}
+where $D_{s,t} = (1 - \alpha_{t|s})(1 - \alpha_s)$.
+
+To use this for generation, it is common to either substitute a neural network for $x_0$ as a plug in parameterization, or to learn the denoiser $P(X_0 | X_t)$. As shown in \citet{gourevitch2026uniform}, it is possible to translate between these parameterizations. Thus we assume the denoiser parameterization.
+
+To sample from the bridge, we first sample $X_0 \sim P_{\theta}(\cdot | X_t)$, $U \sim \text{Cat}(\frac{1}{K})$.
+For each position, we sample from $\text{Cat}(p_{accept} \cdot x_0 + p_{stay} \cdot x_t + p_{noise} \cdot u)$ with probabilities defined as follows: 
+\begin{align}
+\label{eq:true-rev-coords}
+    p_{accept} &= \frac{\alpha_s - \alpha_t}{Z(x_t, x_0)} \\
+    p_{stay} &= \frac{K\alpha_t \langle x_t, x_0 \rangle + \alpha_{t|s} - \alpha_t}{Z(x_t, x_0)} \\
+    p_{noise} &= \frac{D_{s,t}}{Z(x_t, x_0)} \\
+    Z(x_t, x_0) &= K \alpha_{t} \langle x_t, x_0 \rangle + 1 - \alpha_t
+\end{align}
+
+\paragraph{Block Diffusion}
+Block diffusion is a technique that interpolates between autoregressive order and pure diffusion. Given a maximum context length $C$, block diffusion splits this into evenly sized contiguous blocks $b$ that are denoised in a left-to-right order \citep{arriola2025blockdiffusioninterpolatingautoregressive, deschenaux2026blockgen}. 
+This technique is useful as it allows for some form of KV caching whereas pure diffusion requires recomputing attention across all positions every step.
+
+\subsection{Adaptive Samplers}
+In masked diffusion, it is known that generation order is crucial for generation quality \citep{kim2025train}.
+Towards this end, training free adaptive sampling algorithms are commonly used as they require no architectural modifications \citep{nie2026large, ye2025dream7bdiffusionlarge}.
+In general, such algorithms typically rely on the model's logits to determine the ordering, although some also leverage the internal attention patterns \citep{kim2026klass, wu2026fast}.
+
+\paragraph{Entropy Bound Sampler}
+The entropy-bound sampler introduced in \citet{ben2026accelerated} is a specific instance of an adaptive order sampler for masked diffusion, although it was later used as the default sampler for DiffusionGemma \citep{team2026diffusiongemma}.
+As our study primarily investigates DiffusionGemma, we briefly review the EB sampler.
+The EB sampler sorts tokens by the predictive entropy in ascending order and accepts the largest subset $U$ such that: 
+\begin{align}
+    \label{eq:eb-bound}
+    \sum_{i \in U} H(P_{\theta}^i(\cdot | X_t)) - \max_{i \in U}  H(P_{\theta}^i(\cdot | X_t)) \le \gamma.
+\end{align}
+Here, $\gamma \ge 0$ is a tuneable hyper-parameter, the entropy bound. As discussed in \citet{ben2026accelerated}, this sampler approximately bounds joint dependence error when the model has low prediction error. 
+
+
+% \subsection{Discrete Diffusion}
+% The general goal of the model is to accurately learn some target distribution $P(X)$. However, as $X$ is a sequence of discrete tokens from some vocabulary $V$, it is intractible to directly learn to model this distribution. 
+% Autoregressive models address this by factorizing the probabilities sequentially: 
+% \[
+% P(\{x_1, x_2, \dots x_n\}) = \prod_{i=1}^n P(x_{i}|x_{i-1})
+% \]
+% While this is a very simple approach, it constrains sampling to a single token at a time, as well as forcing a strict left-to-right order. 
+
+% Discrete Diffusion instead approaches the problem by defining a corruption process on the space of sequences that transforms clean sequences into complete noise. In general, the corruption process is defined by some prior $\pi$ and keep rate $\alpha_t$, with the corruption kernel as follows: 
+% \[
+% q_{t|0}(\cdot | X) = \text{Categorical} \left( \delta(X)  \cdot \alpha_t + \pi \cdot (1 - \alpha_t) \right)
+% \]
+
+% The field has gradually coalesced around two forms of discrete diffusion: the first defines the prior $\pi$ to be a degenerate distribution over a masked token. In other words, the corruption process replaces tokens gradually with mask tokens. This is referred to as masked diffusion. 
+% The other defines $\pi = \text{Uniform}(V)$, meaning that tokens in the original sequence are replaced by random tokens sampled from the distribution with uniform probability. This is referred to as uniform diffusion.
+
+% \subsection{Block diffusion}
+% \label{sec:prelim-block}
+ 
+% Scaled diffusion language models are decoded block-autoregressively \citet{arriola2025blockdiffusioninterpolatingautoregressive, team2026diffusiongemma, ye2025dream7bdiffusionlarge, nie2026large, song2025seed}: the sequence is partitioned into contiguous blocks
+% $X^{B_1}, \dots, X^{B_N}$ and factorized as
+
+% \begin{equation}
+% \label{eq:block-factorization}
+% \log P_\theta(X) \;=\; \sum_{n=1}^{N}
+% \log P_\theta\!\left(X^{B_n} \,\middle|\, X^{B_{<n}}\right),
+% \end{equation}
+% where each conditional is realized by a full diffusion process over the block, conditioned on the previously generated prefix. This factorization recovers variable-length generation and prefix KV caching, both of which full-canvas diffusion forfeits.
+ 
+% We consider the encoder--decoder realization used by DiffusionGemma
+% \citep{team2026diffusiongemma}. A causal \emph{encoder} ingests committed text and maintains a standard KV cache; a \emph{decoder} denoises the current block, the \emph{canvas}, attending bidirectionally within the canvas
+% and to the cached prefix. Decoding proceeds canvas by canvas: the current canvas is iteratively denoised until a
+% convergence criterion is met, at which point the \emph{entire} canvas is committed, ingested by the encoder, and
+% the next canvas begins. Notably, every denoising step is a forward pass over the full canvas width, regardless of how many positions
+%  remain unresolved.
+ 
+% \subsection{The entropy-bounded sampler}
+% \label{sec:prelim-eb}
+
+% Within a block, the sampler must decide at each step which positions to accept and which to renoise. The \emph{entropy-bounded (EB)
+% sampler}~\citep{ben2026accelerated} makes this decision adaptively. Let $P^{\,l}$ denote the model's posterior at position $l$ of
+% the canvas, and let $M$ denote the set of unresolved positions. Positions in $M$ are sorted in ascending order of entropy, and the accepted set $U \subseteq M$ is chosen as the largest prefix of this ordering satisfying
+% \begin{equation}
+% \label{eq:eb-bound}
+% \sum_{l \in U} H\!\left(P^{\,l}\right)
+% \;\le\; \gamma,
+% \end{equation}
+% for a threshold $\gamma \ge 0$. The left-hand side upper-bounds the joint dependence among the accepted positions \cite{ben2026accelerated}, so that sampling them independently within a single step incurs bounded error. The threshold interpolates between sequential decoding ($\gamma = 0$, one position per step) and fully parallel acceptance ($\gamma = \infty$); the number of accepted positions per step is
+% adaptive, large where the model is confident and small where it is not.
+ 
+% In the uniform-state setting, accepted positions retain their sampled values in the next state, while all remaining positions are renoised
+% and revisited.
