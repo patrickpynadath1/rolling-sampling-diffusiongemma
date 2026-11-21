@@ -233,8 +233,8 @@ $4{+}6$.  \textbf{Right:} rows are queries, columns are keys; a coloured cell
 means the query attends to the key.  The encoded prefix is causal, so its
 KV-cache entries depend only on committed tokens and are never revised, while
 denoising positions are bidirectional among themselves and attend fully to the
-prefix.  Committing more per pass therefore buys cache progress at the cost of
-denoising width on the next pass.  Every query additionally attends to the
+prefix.  Committing more positions per pass therefore moves the KV cache forward
+faster, but leaves fewer positions to denoise on the next pass.  Every query additionally attends to the
 whole KV cache (white cells), which the panels omit for space.}
 \label{fig:algorithm-concept}
 \end{figure}

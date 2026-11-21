@@ -24,10 +24,10 @@ For the unconstrained variants, we also track the empirical frequencies of each 
 We show these position volatility metrics in Figure~\ref{fig:wasted} (bottom row).
 
 \paragraph{Results}
-We observe that for each adaptive variant, the unconstrained sampler achieves a superior Pareto frontier than the frozen sampler, and this gap increases with further relaxation of the thresholds.
+For each adaptive variant, the unconstrained sampler achieves a better Pareto frontier than the frozen sampler, and the gap grows as the entropy bound is relaxed.
 At the loosest bound, the frozen variants fall to about 20\% macro Pass@1, while the unconstrained variants stay near 70\%.
 
-Furthermore, the number of positions that change after initial acceptance increases with higher entropy thresholds, and is relatively unaffected by whether the sampler uses noise injection.
+The number of positions that change after initial acceptance also increases with higher entropy bounds, and is relatively unaffected by whether the sampler uses noise injection.
 At the default bound of $0.1$, roughly 97\% to 99\% of accepted positions never change, so the default sampler behaves much like a frozen one; revisions become frequent only as the bound is relaxed.
 The simulation shows the cost of removing later revision on a per-position basis: accepting a token once does not mean that fixing it will preserve performance at higher entropy bounds. Self-correction also persists without renoising, so explicit noise injection is not necessary for these revisions.
 

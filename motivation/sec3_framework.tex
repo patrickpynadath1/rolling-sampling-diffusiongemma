@@ -23,7 +23,7 @@ The reverse bridge in equation~\ref{eq:true-rev-coords} gives the probabilities 
 We borrow this routing view from RDM \citep{zheng2023reparameterized}, which introduces auxiliary routing variables and makes the available moves depend on whether the current token is already clean: a clean token either stays or is renoised, and a noisy token is either denoised or renoised.
 We introduce no auxiliary variables and place all three moves on a single simplex: the expectation of the clean-token indicator is the posterior's mass on the current token, and the bridge already exposes the three moves without it.
 
-Furthermore, this aligns with the design principles behind the HackableDiffusion codebase, which is an open-source framework for diffusion models \citep{hackable_diffusion2026github}.
+This formulation also matches the design of HackableDiffusion, an open-source framework for diffusion models \citep{hackable_diffusion2026github}.
 
 \paragraph{Adaptive Samplers as Routing Rules}
 The routing view was introduced to make this choice explicit: \citet{zheng2023reparameterized} observe that the standard sampler routes every token with the same probability, and that writing the router out allows more flexible decoding rules.

@@ -1,7 +1,6 @@
 Autoregressive language models train on all tokens in parallel, yet must generate them one at a time.
 Diffusion language models remove this limit by denoising many tokens in each forward pass \citep{nie2026large, ye2025dream7bdiffusionlarge, team2026diffusiongemma}.
-One promising area for research is diffusion language model samplers, as many advances in the continuous domain have been driven by improved sampler performance \citep{song2020denoising}.
-The same is true for the language domain, where sampling order has been shown to have a dramatic effect on task performance \citep{kim2025train, ben2026accelerated, kim2026klass}.
+Samplers are a natural place to improve these models: in continuous diffusion, many advances have come from better samplers \citep{song2020denoising}, and in language diffusion, the sampling order strongly affects task performance \citep{kim2025train, ben2026accelerated, kim2026klass}.
 
 Any diffusion language sampler makes two choices for each position in its denoising window.
 The first is \emph{where} the next token comes from: the model's prediction, the token already at that position, or fresh noise.

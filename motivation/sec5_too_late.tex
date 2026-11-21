@@ -1,6 +1,6 @@
 At the other extreme, commitment is made at a block level: Unified EB retains every position in the denoising window until the whole block satisfies its stopping rule.
 Here we examine the order in which DiffusionGemma accepts tokens under the Unified EB sampler.
-We observe that DiffusionGemma exhibits a sampling order strongly biased towards autoregressive generation.
+DiffusionGemma accepts tokens in an order strongly biased toward autoregressive, left-to-right generation.
 This autoregressive bias results in many denoising slots within a canvas being "wasted" on tokens that have already converged.
 As a result, a form of rolling sampler where the window moves incrementally through the sequence rather than block by block becomes increasingly appealing as a way to extend the Pareto frontier.
 
@@ -21,7 +21,7 @@ We run the Unified EB sampler on LCB v6, GPQA Diamond and Natural2Code. We track
 In Figure~\ref{fig:wasted} (top row), we observe that the first-acceptance order is strongly correlated with left-to-right order (Appendix~\ref{app:order-stats}). At the default entropy bound, accepted positions rarely change, so this ordering serves as a proxy for convergence order. This is consistent with the behavior of wasted denoising slots in Figure~\ref{fig:wasted} (middle row), where we observe that the percentage of wasted slots generally increases during the denoising trajectory.
 
 \citet{asaria2026neither} previously observed this autoregressive bias in the DiffusionGemma sampler.
-This is not a model-specific quirk: this aligns with many general observations of the sampling behavior for confidence-based samplers for large scale diffusion language models.
+This has been observed as a general pattern for confidence-based samplers across larger diffusion language models \citep{kim2026interface, gong2026diffucoder, lu2026adablock, yao2026decoding}.
 \citet{kim2026interface} demonstrates that confidence based samplers tend to generate samples that are very similar to those produced by left-to-right autoregressive order.
 Other works demonstrate that the ordering itself is highly left to right and provide various explanations for why \citep{gong2026diffucoder, lu2026adablock, yao2026decoding}.
 
