@@ -1,4 +1,4 @@
-Here we introduce the Rolling Entropy Sampler (RES) to strike a balance between per-position commitment and block-level commitment. Rather than committing each token as soon as it is accepted or waiting for the entire window, RES waits until a contiguous prefix of at least $\ell_{\min}$ positions has been accepted by the EB rule.
+Here we introduce the Rolling Entropy Sampler (RES), a middle ground between per-position commitment and block-level commitment. Rather than committing each token as soon as it is accepted or waiting for the entire window, RES waits until a contiguous prefix of at least $\ell_{\min}$ positions has been accepted by the EB rule.
 The core mechanism is simple: instead of waiting for the entire block to converge, RES encodes any sufficiently long contiguous prefix of accepted tokens, appends it to the KV cache, and refills the freed slots with fresh noise.
 An accepted position farther ahead remains free to change until the preceding positions are also accepted and the minimum-shift condition is met. Waiting for the contiguous prefix preserves the chance for later revision without retaining the entire denoising window.
 Figure~\ref{fig:algorithm-concept} illustrates the method.
@@ -33,7 +33,7 @@ First, we use a position-based temperature schedule. Positions toward the left o
 
 Second, we merge the encoding and denoising steps. RES commits short prefixes frequently, so a separate encoding pass for each commit would cost more forward passes than rolling saves; merging makes rolling commitment efficient. All reported TPF numbers count every forward pass for both samplers, including Unified EB’s per-block encoding pass. 
 
-Finally, because the temperature schedule no longer depends on the maximum number of denoising steps, RES can be viewed as an anytime sampler.
+Finally, because the temperature schedule no longer depends on the maximum number of denoising steps, that maximum acts only as a budget. We do not evaluate this property here.
 \paragraph{Position-based Temperature Schedule}
 One natural consequence of the autoregressive bias of DiffusionGemma is that a token's position in the rolling canvas provides a proxy for how close it is to having converged.
 Thus we can modify the standard temperature shaping applied in DiffusionGemma to be based on position rather than noise level.

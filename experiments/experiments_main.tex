@@ -6,11 +6,12 @@ Table~\ref{tab:eb_unified_vs_rolling} reports accuracy and tokens per forward pa
 \input{experiments/results_layout}
 
 \paragraph{Performance and Efficiency}
-RES raises TPF on every benchmark, by 23\% to 43\%, and \textbf{by 32.5\% on the macro average} (19.3 to 25.5).
-Macro accuracy falls by 1.9 points, from 80.7\% to 78.8\%.
+RES increases TPF on every benchmark, by 23\% to 43\%, and \textbf{by 32.5\% on the macro average} (19.3 to 25.5).
+Macro accuracy goes from 80.7\% to 78.8\%.
 The cost is uneven across tasks.
-Accuracy rises on MMLU ($+2.5$ points) and is unchanged within confidence intervals on GPQA Diamond; it falls by 0.5 to 2.8 points on GSM8k, HiddenMath, Natural2Code, and LiveCodeBench; and it falls by 10.7 points on IFEval, the one task where RES is clearly worse.
-Excluding IFEval, the macro drop is 0.5 points.
+Accuracy increases on MMLU (+2.5\% absolute) and is unchanged within confidence intervals on GPQA Diamond.
+It falls by 0.5\% to 2.8\% (absolute) on GSM8k, HiddenMath, Natural2Code, and LiveCodeBench, and by 10.7\% on IFEval, the one task where RES is clearly worse.
+Excluding IFEval, macro accuracy falls by 0.5\%.
 One possible cause of the degradation is exposure bias: RES induces a noise pattern across the window that is heavily left-to-right, which is distinct from the homogeneous noise level used within the block at training time.
 We do not test this explanation here.
 
@@ -31,7 +32,7 @@ Figure~\ref{fig:dual-frontier} shows the frontier for each minimum shift.
 Minimum shifts of 16 to 64 give similar frontiers, between about 26 and 31 TPF.
 Larger shifts move the frontier toward lower throughput: $\ell_{\min}=128$ covers about 23 to 28 TPF, and $\ell_{\min}=256$ about 18 to 24 TPF.
 This direction is expected: a larger minimum shift requires a longer accepted prefix before commitment, moving the decision toward the block level and retaining positions in the denoising window for more computation.
-In this sweep the largest shift does not recover the accuracy of Unified EB at low throughput, so we recommend small shifts for the high-throughput regime and Unified EB otherwise.
+At $\ell_{\min} = 256$, RES differs from Unified EB only in its position-based temperature schedule, so the remaining accuracy gap at low throughput comes from that schedule.
 
 \subsection{Multi-Sample Performance}
 RES also scales better with the number of samples (Figure~\ref{fig:macro_pass_at_k}).

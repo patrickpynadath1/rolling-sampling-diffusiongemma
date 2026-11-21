@@ -1,4 +1,14 @@
-We studied two choices made by diffusion language samplers: where the next token comes from, and when the position is committed to the KV cache.
-Using the EB sampler in DiffusionGemma, we examined per-position commitment and block-level commitment. Freezing tokens upon acceptance simulates the loss of later revision under per-position commitment, which degrades performance at higher entropy bounds. Block-level commitment instead tolerates redundant computation on positions that have already converged.
-RES strikes a balance by waiting for a sufficiently long contiguous accepted prefix. Accepted positions farther ahead retain the chance for revision, while the prefix can leave without waiting for the entire window.
-Across seven benchmarks, RES raises tokens per forward pass by 32.5\% at an average cost of 1.9 points of accuracy and extends the frontier at high throughput. Instruction following degrades more than other tasks, and the block sampler remains better at low throughput.
+We studied when a diffusion language sampler should commit a position to the KV cache.
+In DiffusionGemma, freezing tokens upon acceptance degrades performance at higher entropy bounds, while block-level commitment spends much of each window on positions that have already converged.
+RES commits a sufficiently long accepted prefix and keeps positions farther ahead open to revision.
+It needs no training, and across seven benchmarks it increases tokens per forward pass from 19.3 to 25.5, while macro accuracy goes from 80.7\% to 78.8\%.
+The block sampler remains better at low throughput.
+
+\paragraph{Limitations}
+Tokens per forward pass counts forward passes, not wall-clock time, although each RES pass processes the same number of positions as the baseline.
+All experiments use one model, DiffusionGemma.
+
+\paragraph{Future Work}
+The largest cost of RES is on instruction following, where IFEval accuracy falls by 10.7\% (absolute).
+One possible cause is that RES creates a left-to-right noise pattern that differs from the noise seen in training.
+Training with a rolling noise pattern, as in Clock Diffusion \citep{schiff2026clock}, is a natural way to test and remove this cost.

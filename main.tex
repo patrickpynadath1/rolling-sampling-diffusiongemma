@@ -66,12 +66,13 @@
 
 \begin{abstract}
 A diffusion language sampler makes two choices for every position in its denoising window: where the next token comes from, and when the position is committed to the KV cache.
-These choices give rise to two extremes: committing tokens on a per-position basis, or committing them at a block level.
-Using the entropy-bound sampler in DiffusionGemma, we study the tradeoffs between the two.
-We simulate per-position commitment by freezing each token upon acceptance, removing the chance for later revision: macro accuracy falls from 73\% to 20\% as the entropy bound is relaxed, while the unfrozen variants stay near 70\%.
-Block-level commitment results in redundant computation, as tokens converge in a largely left-to-right order and, on average, more than half of the slots are spent on already-final tokens by twenty denoising steps.
-We introduce the Rolling Entropy Sampler (RES), which waits for a sufficiently long contiguous accepted prefix, allowing accepted positions farther ahead to remain available for revision without waiting for the entire window.
-Across seven benchmarks, RES raises tokens per forward pass by 32.5\% at an average cost of 1.9 points of accuracy, and extends the speed-quality frontier beyond what relaxing the entropy bound alone can reach.
+Using the entropy-bound sampler in DiffusionGemma, we study two extremes of the second choice.
+Committing each token as soon as it is accepted removes the chance to revise it, which hurts when the entropy bound is relaxed to trade accuracy for speed.
+When accepted tokens are frozen, macro accuracy falls from 73\% to 20\% as the bound is relaxed, while the unfrozen sampler stays near 70\%.
+Committing a whole block at once wastes computation, since tokens converge in a largely left-to-right order and more than half of the window holds already-final tokens by twenty denoising steps.
+These findings motivate the Rolling Entropy Sampler (RES), which commits a contiguous accepted prefix once it reaches a minimum length and keeps positions farther ahead open to revision.
+Unlike earlier rolling samplers, RES runs on uniform diffusion, where accepted tokens can still change, and it needs no training.
+Across seven benchmarks, RES increases tokens per forward pass from 19.3 to 25.5, while macro accuracy goes from 80.7\% to 78.8\%, and it extends the speed-quality Pareto frontier beyond what tuning the entropy bound alone reaches.
 \end{abstract}
 
 \maketitle
