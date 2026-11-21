@@ -9,7 +9,6 @@ In the terms of Section~\ref{sec:motivation}, a rolling sampler is an adaptive s
 RES repurposes the acceptance rule for the EB sampler to also serve as the commitment rule: once a sufficiently large contiguous prefix of positions has been accepted under the EB rule, these positions are appended to the KV cache. 
 The entropy bound criterion controls the predictive entropies of jointly accepted positions. Under the low-prediction-error assumption discussed in Section~\ref{sec:prelims}, \eqref{eq:eb-bound} approximately bounds the joint dependence error incurred by factorized sampling \citep{ben2026accelerated}.
 Thus we use the EB criterion to define $F_{commit}$ as well as $F_{route}$: RES commits the longest prefix of the window whose positions all lie in the accepted set $A_{\gamma}$, provided it meets the minimum shift criterion below (Table~\ref{tab:samplers}).
-
 \begin{align*}
     F_{commit}(X)_i &= \mathbb{1}\!\left[\, i \le \ell(A_\gamma) \,\right] \, \mathbb{1}\!\left[\, \ell(A_\gamma) \ge \ell_{\min} \,\right] \\
     A_\gamma &= \arg\max_{U} |U| \quad \text{s.t.} \quad
