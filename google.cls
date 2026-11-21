@@ -234,12 +234,12 @@ reserved}
 \fancypagestyle{firststyle}{
 	\fancyhead[L]{
 	 \ifcase\@selectedlogo % Case 0: No logo
-      \or % Case 1
-        \includegraphics[height=18pt]{assets/logo_Google_FullColor}
+      \or % Case 1: Google logo (file not included in this project)
+        % \includegraphics[height=18pt]{assets/logo_Google_FullColor}
       \or % Case 2
         \includegraphics[height=18pt]{assets/logo_GoogleDeepMind_FullColor}
-      \or % Case 3
-        \includegraphics[height=18pt]{assets/logo_GoogleResearch_FullColor}
+      \or % Case 3: Google Research logo (file not included in this project)
+        % \includegraphics[height=18pt]{assets/logo_GoogleResearch_FullColor}
       \else % Should not happen due to the \uselogo command's checks
       \fi
 }
