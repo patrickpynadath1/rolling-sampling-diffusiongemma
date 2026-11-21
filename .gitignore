@@ -14,3 +14,10 @@
 
 # Scratch build checks
 tmp/buildcheck/
+
+# Snapshots, backups and scratch (keep out of the repo)
+tmp/
+RES_Overleaf*/
+*.zip
+_backup*/
+*.before-*
